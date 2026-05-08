@@ -1247,26 +1247,23 @@ void EInkDisplay::displayGrayBuffer(const bool turnOffScreen,
 
     if (factoryMode) {
       // Factory absolute mode - use image/factory LUTs
+      // Note: X3 has no separate fast factory LUTs. Fast mode falls back to
+      // quality (lut_x3_*_img) with a warning.
       if (lut == lut_factory_fast) {
         if (Serial)
-          Serial.printf("[%lu]   X3_GRAY_MODE=factory_fast\n", millis());
-        sendCommandDataX3(0x20, lut_x3_vcom_fast, 42);
-        sendCommandDataX3(0x21, lut_x3_ww_fast, 42);
-        sendCommandDataX3(0x22, lut_x3_bw_fast, 42);
-        sendCommandDataX3(0x23, lut_x3_wb_fast, 42);
-        sendCommandDataX3(0x24, lut_x3_bb_fast, 42);
-        sendCommandDataByteX3(0x50, 0xA9, 0x07);
+          Serial.printf(
+              "[%lu]   X3_GRAY_MODE=factory_fast (fallback to quality)\n",
+              millis());
       } else {
-        // Default to quality factory mode (lut_factory_quality or nullptr)
         if (Serial)
           Serial.printf("[%lu]   X3_GRAY_MODE=factory_quality\n", millis());
-        sendCommandDataX3(0x20, lut_x3_vcom_img, 42);
-        sendCommandDataX3(0x21, lut_x3_ww_img, 42);
-        sendCommandDataX3(0x22, lut_x3_bw_img, 42);
-        sendCommandDataX3(0x23, lut_x3_wb_img, 42);
-        sendCommandDataX3(0x24, lut_x3_bb_img, 42);
-        sendCommandDataByteX3(0x50, 0xA9, 0x07);
       }
+      sendCommandDataX3(0x20, lut_x3_vcom_img, 42);
+      sendCommandDataX3(0x21, lut_x3_ww_img, 42);
+      sendCommandDataX3(0x22, lut_x3_bw_img, 42);
+      sendCommandDataX3(0x23, lut_x3_wb_img, 42);
+      sendCommandDataX3(0x24, lut_x3_bb_img, 42);
+      sendCommandDataByteX3(0x50, 0xA9, 0x07);
     } else {
       // Differential grayscale mode
       if (Serial)
