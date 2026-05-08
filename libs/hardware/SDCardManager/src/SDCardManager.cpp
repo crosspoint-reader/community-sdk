@@ -1,4 +1,6 @@
 #include "SDCardManager.h"
+#include <memory>
+#include <utility>
 
 namespace {
 constexpr uint8_t SD_CS = 12;
@@ -242,36 +244,55 @@ bool SDCardManager::openFileForWrite(const char* moduleName, const String& path,
 }
 
 bool SDCardManager::removeDir(const char* path) {
-  // 1. Open the directory
-  auto dir = sd.open(path);
-  if (!dir) {
-    return false;
-  }
-  if (!dir.isDirectory()) {
-    return false;
-  }
+  // Heap-allocated name buffer: 255 UTF-8 characters + null terminator
+  constexpr size_t NAME_BUFFER_SIZE = 1021;
+  auto nameBuf = std::make_unique<char[]>(NAME_BUFFER_SIZE);
 
-  auto file = dir.openNextFile();
-  char name[128];
-  while (file) {
-    String filePath = path;
-    if (!filePath.endsWith("/")) {
-      filePath += "/";
-    }
-    file.getName(name, sizeof(name));
-    filePath += name;
+  // Stack of (dirPath, postOrder): postOrder=true means rmdir this path
+  std::vector<std::pair<std::string, bool>> stack;
+  stack.reserve(16);
+  stack.push_back({path, false});
 
-    if (file.isDirectory()) {
-      if (!removeDir(filePath.c_str())) {
+  while (!stack.empty()) {
+    auto [dirPath, postOrder] = std::move(stack.back());
+    stack.pop_back();
+
+    if (postOrder) {
+      if (!sd.rmdir(dirPath.c_str())) {
         return false;
       }
-    } else {
-      if (!sd.remove(filePath.c_str())) {
-        return false;
+      continue;
+    }
+
+    auto dir = sd.open(dirPath.c_str());
+    if (!dir || !dir.isDirectory()) {
+      return false;
+    }
+
+    // Push this dir for post-order rmdir (after all children are processed)
+    stack.push_back({dirPath, true});
+
+    for (auto file = dir.openNextFile(); file; file = dir.openNextFile()) {
+      file.getName(nameBuf.get(), NAME_BUFFER_SIZE);
+      std::string entryPath = dirPath;
+      if (entryPath.back() != '/') {
+        entryPath += '/';
+      }
+      entryPath += nameBuf.get();
+
+      const bool isDir = file.isDirectory();
+      file.close();
+
+      if (isDir) {
+        stack.push_back({std::move(entryPath), false});
+      } else {
+        if (!sd.remove(entryPath.c_str())) {
+          return false;
+        }
       }
     }
-    file = dir.openNextFile();
+    dir.close();
   }
 
-  return sd.rmdir(path);
+  return true;
 }
