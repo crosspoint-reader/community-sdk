@@ -722,10 +722,6 @@ void EInkDisplay::swapBuffers() {
 #endif
 
 void EInkDisplay::grayscaleRevert() {
-  if (!inGrayscaleMode) {
-    return;
-  }
-
   inGrayscaleMode = false;
 
   if (_x3Mode) {
