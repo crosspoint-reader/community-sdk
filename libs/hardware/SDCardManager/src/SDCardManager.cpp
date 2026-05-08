@@ -244,6 +244,11 @@ bool SDCardManager::openFileForWrite(const char* moduleName, const String& path,
 }
 
 bool SDCardManager::removeDir(const char* path) {
+  if (!initialized || path == nullptr || path[0] == '\0' ||
+      (path[0] == '/' && path[1] == '\0')) {
+    return false;
+  }
+
   // Heap-allocated name buffer: 255 UTF-8 characters + null terminator
   constexpr size_t NAME_BUFFER_SIZE = 1021;
   auto nameBuf = std::make_unique<char[]>(NAME_BUFFER_SIZE);
