@@ -62,6 +62,13 @@ class InputManager {
    */
   unsigned long getHeldTime() const;
 
+    /**
+   * Returns the time the power button has been held
+   *
+   * @return duration in milliseconds
+   */
+  unsigned long getPowerButtonHeldTime() const;
+
   // Button indices
   static constexpr uint8_t BTN_BACK = 0;
   static constexpr uint8_t BTN_CONFIRM = 1;
@@ -92,6 +99,9 @@ class InputManager {
   unsigned long lastDebounceTime;
   unsigned long buttonPressStart;
   unsigned long buttonPressFinish;
+  unsigned long powerButtonPressStart;
+  unsigned long powerButtonPressFinish;
+
 
   static constexpr int NUM_BUTTONS_1 = 4;
   static const int ADC_RANGES_1[];
