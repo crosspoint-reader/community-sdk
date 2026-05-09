@@ -66,8 +66,19 @@ class EInkDisplay {
   // Hint the X3 policy to run a one-shot full resync on next update.
   void requestResync(uint8_t settlePasses = 0);
 
-  // debug function
+  // Drive pixels back to clean BW states after a differential grayscale
+  // render. Idempotent — safe to call from any state; performs work iff
+  // the controller is currently in differential grayscale mode. Always
+  // called by displayBuffer() / displayWindow() before they push a new
+  // frame.
   void grayscaleRevert();
+
+  // Mark the differential-grayscale state as already cleaned up so the
+  // next displayBuffer() / displayWindow() will not perform a
+  // grayscaleRevert() refresh. Use when the consumer has already rebased
+  // both RAM banks (e.g. cleanupGrayscaleBuffers + a follow-up FAST_REFRESH
+  // is sufficient cleanup). No-op if not currently in grayscale mode.
+  void clearGrayscaleModeFlag() { inGrayscaleMode = false; }
 
   // LUT control
   void setCustomLUT(bool enabled, const unsigned char* lutData = nullptr);

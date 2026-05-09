@@ -721,6 +721,15 @@ void EInkDisplay::swapBuffers() {
 }
 #endif
 
+// Idempotent: drives pixels back to clean BW states iff the controller was
+// last left in a custom-LUT differential grayscale state, then clears the
+// flag. Safe to call from any state — callers do not pre-check or clear
+// inGrayscaleMode. The flag is set to true by displayGrayBuffer() in
+// differential mode (factoryMode=false); factory mode performs its own
+// 0xC7 cleanup and leaves inGrayscaleMode=false. Consumers that handle
+// their own post-gray cleanup (e.g. firmware that rewrites both RAM banks
+// and accepts the next FAST_REFRESH as the cleanup pass) may call
+// clearGrayscaleModeFlag() to suppress this revert refresh.
 void EInkDisplay::grayscaleRevert() {
   if (!inGrayscaleMode) {
     return;
@@ -901,11 +910,9 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
     mode = HALF_REFRESH;
   }
 
-  // If currently in grayscale mode, revert first to black/white
-  if (inGrayscaleMode) {
-    inGrayscaleMode = false;
-    grayscaleRevert();
-  }
+  // If currently in grayscale mode, revert first to black/white.
+  // Idempotent — no-op if not in grayscale mode.
+  grayscaleRevert();
 
   if (_x3Mode) {
     // X3 update policy: RED RAM (0x10) on the controller stores the previous
@@ -1150,11 +1157,8 @@ void EInkDisplay::displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
   }
 
   // displayWindow is not supported while the rest of the screen has grayscale
-  // content, revert it
-  if (inGrayscaleMode) {
-    inGrayscaleMode = false;
-    grayscaleRevert();
-  }
+  // content, revert it. Idempotent — no-op if not in grayscale mode.
+  grayscaleRevert();
 
   // Calculate window buffer size
   const uint16_t windowWidthBytes = w / 8;
