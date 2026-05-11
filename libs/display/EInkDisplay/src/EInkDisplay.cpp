@@ -37,6 +37,13 @@
 #define CMD_WRITE_VCOM 0x2C     // Write VCOM
 #define CMD_WRITE_TEMP 0x1A     // Write temperature
 
+// Default VCOM = -1.2 V. Matches lut_factory_quality[109] and
+// lut_grayscale[109] — the value every historical refresh path ran the panel
+// at. Used to restore the register when a custom LUT is disabled, so a prior
+// aggressive VCOM (e.g. lut_factory_fast = 0x50 / -2.0 V) cannot leak into
+// subsequent FAST_REFRESH BW page turns, which never reload analog regs.
+#define VCOM_DEFAULT 0x30
+
 // Power management
 #define CMD_DEEP_SLEEP 0x10 // Deep sleep
 
@@ -1433,9 +1440,16 @@ void EInkDisplay::setCustomLUT(const bool enabled,
     if (Serial)
       Serial.printf("[%lu]   Custom LUT loaded\n", millis());
   } else {
+    // Restore VCOM to its default. The controller retains the last
+    // CMD_WRITE_VCOM value across FAST_REFRESH cycles, so without this a prior
+    // custom LUT's VCOM (notably lut_factory_fast = 0x50, -2.0 V) would
+    // silently drive every subsequent BW refresh until another LUT loads.
+    sendCommand(CMD_WRITE_VCOM);
+    sendData(VCOM_DEFAULT);
     customLutActive = false;
     if (Serial)
-      Serial.printf("[%lu]   Custom LUT disabled\n", millis());
+      Serial.printf("[%lu]   Custom LUT disabled (VCOM restored to 0x%02X)\n",
+                    millis(), VCOM_DEFAULT);
   }
 }
 
