@@ -30,6 +30,14 @@
 #define CTRL1_NORMAL 0x00     // Normal mode - compare RED vs BW for partial
 #define CTRL1_BYPASS_RED 0x40 // Bypass RED RAM (treat as 0) - for full refresh
 
+static constexpr uint8_t DISPLAY_UPDATE_CLOCK_ON = 0x80;
+static constexpr uint8_t DISPLAY_UPDATE_ANALOG_ON = 0x40;
+static constexpr uint8_t DISPLAY_UPDATE_DISPLAY_START = 0x04;
+static constexpr uint8_t DISPLAY_UPDATE_ANALOG_OFF_PHASE = 0x02;
+static constexpr uint8_t DISPLAY_UPDATE_CLOCK_OFF = 0x01;
+static constexpr uint8_t DISPLAY_UPDATE_FACTORY_GRAY =
+    DISPLAY_UPDATE_CLOCK_ON | DISPLAY_UPDATE_ANALOG_ON | DISPLAY_UPDATE_DISPLAY_START;
+
 // LUT and voltage settings
 #define CMD_WRITE_LUT 0x32      // Write LUT
 #define CMD_GATE_VOLTAGE 0x03   // Gate voltage
@@ -732,9 +740,9 @@ void EInkDisplay::swapBuffers() {
 // last left in a custom-LUT differential grayscale state, then clears the
 // flag. Safe to call from any state — callers do not pre-check or clear
 // inGrayscaleMode. The flag is set to true by displayGrayBuffer() in
-// differential mode (factoryMode=false); factory mode performs its own
-// 0xC7 cleanup and leaves inGrayscaleMode=false. Consumers that handle
-// their own post-gray cleanup (e.g. firmware that rewrites both RAM banks
+// differential mode (factoryMode=false); factory mode leaves inGrayscaleMode=false
+// and uses controller-state bookkeeping for later deep sleep. Consumers that
+// handle their own post-gray cleanup (e.g. firmware that rewrites both RAM banks
 // and accepts the next FAST_REFRESH as the cleanup pass) may call
 // clearGrayscaleModeFlag() to suppress this revert refresh.
 void EInkDisplay::grayscaleRevert() {
@@ -1328,19 +1336,26 @@ void EInkDisplay::displayGrayBuffer(const bool turnOffScreen,
     // (BYPASS_RED) which would ignore RED RAM and break 4-level grayscale.
     sendCommand(CMD_DISPLAY_UPDATE_CTRL1);
     sendData(CTRL1_NORMAL); // 0x00
-    // 0xC7 = CLOCK_ON(0x80) + ANALOG_ON(0x40) + DISPLAY_START(0x04) +
-    //        ANALOG_OFF(0x02) + CLOCK_OFF(0x01) — full self-contained power
-    //        cycle.
+    // Keep rails on after the factory gray paint. Running ANALOG_OFF/CLOCK_OFF in
+    // the same activation can disturb settled gray particles and reintroduce smear.
     sendCommand(CMD_DISPLAY_UPDATE_CTRL2);
-    sendData(0xC7);
+    sendData(DISPLAY_UPDATE_FACTORY_GRAY);
     sendCommand(CMD_MASTER_ACTIVATION);
     waitWhileBusy("factory_gray");
-    isScreenOn = false; // 0xC7 always powers down after update
+    isScreenOn = true;
+    skipPowerDownActivationOnDeepSleep = true;
   } else {
     refreshDisplay(FAST_REFRESH, turnOffScreen);
   }
 
-  setCustomLUT(false);
+  if (factoryMode && selectedLut == lut_factory_quality) {
+    customLutActive = false;
+    if (Serial)
+      Serial.printf("[%lu]   Factory quality LUT disabled (VCOM already default)\n",
+                    millis());
+  } else {
+    setCustomLUT(false);
+  }
 }
 
 void EInkDisplay::refreshDisplay(const RefreshMode mode,
@@ -1349,6 +1364,8 @@ void EInkDisplay::refreshDisplay(const RefreshMode mode,
     displayBuffer(mode, turnOffScreen);
     return;
   }
+
+  skipPowerDownActivationOnDeepSleep = false;
 
   // Configure Display Update Control 1
   sendCommand(CMD_DISPLAY_UPDATE_CTRL1);
@@ -1453,18 +1470,19 @@ void EInkDisplay::setCustomLUT(const bool enabled,
   }
 }
 
-void EInkDisplay::deepSleep() {
+void EInkDisplay::deepSleep(const bool powerDownDisplay) {
   if (Serial)
     Serial.printf("[%lu]   Preparing display for deep sleep...\n", millis());
 
-  // First, power down the display properly
-  // This shuts down the analog power rails and clock
-  if (isScreenOn) {
+  // First, power down the display properly. Factory-LUT sleep screens leave gray
+  // particles settled after the visible paint, so skip the activation here and
+  // let CMD_DEEP_SLEEP put the controller to sleep without another waveform run.
+  if (isScreenOn && powerDownDisplay && !skipPowerDownActivationOnDeepSleep) {
     sendCommand(CMD_DISPLAY_UPDATE_CTRL1);
     sendData(CTRL1_BYPASS_RED); // Normal mode
 
     sendCommand(CMD_DISPLAY_UPDATE_CTRL2);
-    sendData(0x03); // Set ANALOG_OFF_PHASE (bit 1) and CLOCK_OFF (bit 0)
+    sendData(DISPLAY_UPDATE_ANALOG_OFF_PHASE | DISPLAY_UPDATE_CLOCK_OFF);
 
     sendCommand(CMD_MASTER_ACTIVATION);
 
@@ -1472,6 +1490,10 @@ void EInkDisplay::deepSleep() {
     waitWhileBusy(" display power-down");
 
     isScreenOn = false;
+  } else if (isScreenOn && powerDownDisplay && skipPowerDownActivationOnDeepSleep) {
+    if (Serial)
+      Serial.printf("[%lu]   Skipping factory-gray power-down activation\n",
+                    millis());
   }
 
   // Now enter deep sleep mode
@@ -1479,6 +1501,8 @@ void EInkDisplay::deepSleep() {
     Serial.printf("[%lu]   Entering deep sleep mode...\n", millis());
   sendCommand(CMD_DEEP_SLEEP);
   sendData(0x01); // Enter deep sleep
+  isScreenOn = false;
+  skipPowerDownActivationOnDeepSleep = false;
 }
 
 void EInkDisplay::saveFrameBufferAsPBM(const char *filename) {

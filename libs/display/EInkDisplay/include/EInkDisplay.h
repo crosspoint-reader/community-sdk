@@ -84,7 +84,7 @@ class EInkDisplay {
   void setCustomLUT(bool enabled, const unsigned char* lutData = nullptr);
 
   // Power management
-  void deepSleep();
+  void deepSleep(bool powerDownDisplay = true);
 
   // Access to frame buffer
   uint8_t* getFrameBuffer() const {
@@ -132,6 +132,7 @@ class EInkDisplay {
   bool customLutActive;
   bool inGrayscaleMode;
   bool drawGrayscale;
+  bool skipPowerDownActivationOnDeepSleep = false;
 
   // Low-level display control
   void resetDisplay();
