@@ -132,7 +132,7 @@ class EInkDisplay {
   bool customLutActive;
   bool inGrayscaleMode;
   bool drawGrayscale;
-  bool skipPowerDownActivationOnDeepSleep = false;
+  bool factoryGrayNeedsPowerOffOnDeepSleep = false;
 
   // Low-level display control
   void resetDisplay();
