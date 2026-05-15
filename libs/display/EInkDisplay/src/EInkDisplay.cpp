@@ -348,6 +348,11 @@ void EInkDisplay::begin() {
   if (Serial)
     Serial.printf("[%lu] EInkDisplay: begin() called\n", millis());
 
+  isScreenOn = false;
+  customLutActive = false;
+  inGrayscaleMode = false;
+  drawGrayscale = false;
+
   frameBuffer = frameBuffer0;
 #ifndef EINK_DISPLAY_SINGLE_BUFFER_MODE
   frameBufferActive = frameBuffer1;
@@ -750,6 +755,10 @@ void EInkDisplay::swapBuffers() {
 #endif
 
 void EInkDisplay::grayscaleRevert() {
+  if (!inGrayscaleMode) {
+    return;
+  }
+
   inGrayscaleMode = false;
 
   if (_x3Mode) {
@@ -912,11 +921,13 @@ void EInkDisplay::cleanupGrayscaleBuffers(const uint8_t *bwBuffer) {
     _x3RedRamSynced = true;
     _x3ForceFullSyncNext = false;
     _x3ForcedConditionPassesNext = 0;
+    inGrayscaleMode = false;
     return;
   }
 
   setRamArea(0, 0, displayWidth, displayHeight);
   writeRamBuffer(CMD_WRITE_RAM_RED, bwBuffer, bufferSize);
+  inGrayscaleMode = false;
 }
 #endif
 
@@ -928,7 +939,6 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
 
   // If currently in grayscale mode, revert first to black/white
   if (inGrayscaleMode) {
-    inGrayscaleMode = false;
     grayscaleRevert();
   }
 
@@ -1178,7 +1188,6 @@ void EInkDisplay::displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
   // displayWindow is not supported while the rest of the screen has grayscale
   // content, revert it
   if (inGrayscaleMode) {
-    inGrayscaleMode = false;
     grayscaleRevert();
   }
 
