@@ -884,11 +884,16 @@ void EInkDisplay::cleanupGrayscaleBuffers(const uint8_t *bwBuffer) {
     _x3RedRamSynced = true;
     _x3ForceFullSyncNext = false;
     _x3ForcedConditionPassesNext = 0;
+    inGrayscaleMode = false;
     return;
   }
 
   setRamArea(0, 0, displayWidth, displayHeight);
   writeRamBuffer(CMD_WRITE_RAM_RED, bwBuffer, bufferSize);
+  // The RED RAM now contains the restored BW frame for the next fast
+  // differential update. A later grayscaleRevert() would add a visible extra
+  // cleanup refresh before the actual page turn.
+  inGrayscaleMode = false;
 }
 #endif
 
@@ -1295,11 +1300,10 @@ void EInkDisplay::displayGrayBuffer(const bool turnOffScreen,
     return;
   }
   drawGrayscale = false;
-  // Only set grayscaleMode for original differential LUT (triggers
-  // grayscaleRevert on next BW display). Factory absolute LUTs handle their own
-  // cleanup via cleanupGrayscaleWithFrameBuffer. Differential modes
-  // (factoryMode=false) set inGrayscaleMode to trigger grayscaleRevert on the
-  // next BW display. Factory mode manages its own cleanup.
+  // Differential mode keeps this fallback set for callers that do not re-sync
+  // controller RAM with cleanupGrayscaleBuffers(). Reader AA does perform that
+  // cleanup after restoring its BW frame, which clears this flag before the
+  // next BW page turn.
   inGrayscaleMode = !factoryMode;
 
   const unsigned char *selectedLut = lut;
