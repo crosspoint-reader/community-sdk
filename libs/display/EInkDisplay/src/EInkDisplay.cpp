@@ -1404,8 +1404,13 @@ void EInkDisplay::displayGrayBufferFactoryActivate() {
   waitWhileBusy("factory_gray");
   isScreenOn = true;
   factoryGrayNeedsPowerOffOnDeepSleep = true;
-  // Quality LUT VCOM matches default — no restore needed
-  customLutActive = false;
+  // Restore VCOM to default. lut_factory_quality's VCOM byte may differ from
+  // VCOM_DEFAULT (e.g. 0x22 after the stock-V5.5.9 voltage experiment), in
+  // which case subsequent BW refreshes would silently drive at the wrong bias
+  // until another LUT loads. Same precedent as lut_factory_fast=0x50 noted in
+  // setCustomLUT(false). Costs one extra SPI cmd+byte; harmless for sleep
+  // path (panel image already settled; VCC drops shortly after).
+  setCustomLUT(false);
 }
 
 void EInkDisplay::deepSleep(const bool powerDownDisplay) {
