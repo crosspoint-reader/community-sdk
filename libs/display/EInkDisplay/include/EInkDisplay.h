@@ -70,6 +70,14 @@ class EInkDisplay {
   void displayGrayBufferFactorySetup(const unsigned char* lut);
   void displayGrayBufferFactoryActivate();
 
+  // Stock-V5.5.9 byte-match preconditioning pass for factory-LUT sleep paths.
+  // Fills frameBuffer with `color`, writes both BW and RED RAM, fires a full
+  // refresh with CTRL2 = 0xF7 (CLOCK_ON | ANALOG_ON | TEMP_LOAD | LUT_LOAD |
+  // DISPLAY_START | ANALOG_OFF | CLOCK_OFF) — full power-cycle. Skips the
+  // SINGLE_BUFFER_MODE post-RED-sync that displayBuffer() does (Difference #5).
+  // X4 mode only; X3 falls back to displayBuffer(FULL_REFRESH, true).
+  void displayBufferPrecondition(uint8_t color);
+
   void refreshDisplay(RefreshMode mode = FAST_REFRESH, bool turnOffScreen = false);
 
   // Hint the X3 policy to run a one-shot full resync on next update.

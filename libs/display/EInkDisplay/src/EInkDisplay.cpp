@@ -1380,6 +1380,42 @@ void EInkDisplay::setCustomLUT(const bool enabled, const unsigned char* lutData)
 // Two-phase factory grayscale render — matches stock V5.5.9 SPI order:
 //   setCustomLUT → Border Waveform → (caller writes RAM here) → CTRL1 → CTRL2 → MASTER_ACTIVATION
 // See docs/v559-disassembly-findings.md. X4 mode only.
+// Stock-V5.5.9 byte-match preconditioning pass for factory-LUT sleep paths.
+// Stock's precondition function (at firmware addr 0x42010096) does:
+//   - memset buffer to `color` (0x00 or 0xFF)
+//   - setRamArea(0, 0, 800, 480)
+//   - CMD 0x24 + 47000 bytes (writes BW RAM, loops the 1024-byte buffer)
+//   - setRamArea(0, 0, 800, 480) again (implicit in writeRam)
+//   - CMD 0x26 + 47000 bytes (writes RED RAM)
+//   - CTRL1=0x00, CTRL2=0xF7, MASTER_ACTIVATION + waitWhileBusy
+// We replicate the visible-to-controller sequence; the buffer-looping detail
+// doesn't matter (we have a full 48 KB frame buffer).
+//
+// CTRL2 = 0xF7 includes CLOCK_ON | ANALOG_ON | TEMP_LOAD | LUT_LOAD |
+// DISPLAY_START | ANALOG_OFF | CLOCK_OFF — full power cycle ending with
+// rails off. To force the CLOCK_ON | ANALOG_ON bits in refreshDisplay() we
+// must call it with isScreenOn=false, so we clear that state first.
+//
+// Skips the SINGLE_BUFFER_MODE post-RED-sync that displayBuffer() does
+// (Difference #5 in docs/v559-disassembly-findings.md).
+void EInkDisplay::displayBufferPrecondition(uint8_t color) {
+  if (_x3Mode) {
+    // X3 path doesn't share the same controller semantics; fall back.
+    memset(frameBuffer, color, bufferSize);
+    displayBuffer(FULL_REFRESH, true);
+    return;
+  }
+  memset(frameBuffer, color, bufferSize);
+  setRamArea(0, 0, displayWidth, displayHeight);
+  writeRamBuffer(CMD_WRITE_RAM_BW, frameBuffer, bufferSize);
+  writeRamBuffer(CMD_WRITE_RAM_RED, frameBuffer, bufferSize);
+  // Force CTRL2 = 0xF7: refreshDisplay adds CLOCK_ON|ANALOG_ON (0xC0) only
+  // when !isScreenOn. Stock's precondition gets 0xF7 every pass because each
+  // pass leaves rails off. Match that by clearing isScreenOn before the call.
+  isScreenOn = false;
+  refreshDisplay(FULL_REFRESH, true);  // turnOffScreen=true adds 0x03 (ANALOG_OFF | CLOCK_OFF)
+}
+
 void EInkDisplay::displayGrayBufferFactorySetup(const unsigned char* lut) {
   if (_x3Mode) {
     return;  // X3 path uses different command set; caller should use displayGrayBuffer
