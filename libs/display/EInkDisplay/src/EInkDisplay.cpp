@@ -278,6 +278,15 @@ const unsigned char lut_factory_fast[] PROGMEM = {
 // Quality mode (LUT2): 50 waveform frames, FR=0x22, VCOM=-1.2V.
 // Used for standalone XTH wallpapers/covers. Less ghosting, ~67% slower than
 // fast mode.
+// Standard hand-tuned factory grayscale LUT. Restored after the stock-byte-exact
+// experiment caused all-white render: sending stock's shifted-bytes payload
+// (where bytes 50+ encode mostly-HiZ phases) produced no drive activity on the
+// chip — falsifying the "stock relies on OTP fallback for waveform" hypothesis.
+// The chip executes the LUT bytes literally; whatever stock does to make its
+// shifted payload work involves a code path we haven't traced.
+//
+// Voltage bytes restored to original hand-tuned values (Difference #8 also
+// effectively reverted along with the byte-exact experiment).
 const unsigned char lut_factory_quality[] PROGMEM = {
     // VS patterns (LUT0-LUT3 + VCOM), 10 bytes each
     0x00, 0x4A, 0x88, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -303,14 +312,8 @@ const unsigned char lut_factory_quality[] PROGMEM = {
     0x01,  // G9 (RP[9]=1, no practical effect: all-zero timing)
     // Frame rate (lower = slower clock): 0x22 = 34
     0x22, 0x22, 0x22, 0x22, 0x22,
-    // Voltages: VGH, VSH1, VSH2, VSL, VCOM.
-    // EXPERIMENT: stock V5.5.9's setCustomLUT effectively sends 0x00 0x00 0x01 0x22 0x22
-    // for these (due to its LUT pointer being 8 bytes off — see docs/v559-disassembly-findings.md).
-    // Hypothesis: SSD1677 treats 0x00 voltage values as "preserve OTP defaults", so stock
-    // runs the factory LUT against panel-tuned factory voltages. Our prior values (0x17,
-    // 0x41, 0xA8, 0x32, 0x30) overrode OTP defaults with hand-coded values which may not
-    // match the panel's factory tuning → cap-charge endpoint mismatch → ghost on rail drop.
-    0x00, 0x00, 0x01, 0x22, 0x22};
+    // Voltages: VGH, VSH1, VSH2, VSL, VCOM
+    0x17, 0x41, 0xA8, 0x32, 0x30};
 
 EInkDisplay::EInkDisplay(int8_t sclk, int8_t mosi, int8_t cs, int8_t dc, int8_t rst, int8_t busy)
     : _sclk(sclk),
