@@ -159,6 +159,9 @@ class EInkDisplay {
   // in-place (X3 controller scans gates upward), optionally inverts bits
   // before sending, then restores the buffer.
   void sendPlaneX3(uint8_t ramCmd, uint8_t* buf, bool invert);
+  // Fill an entire RAM plane with a single byte (e.g., 0xFF for white).
+  // Streams a small row buffer repeatedly so the framebuffer isn't touched.
+  void fillPlaneX3(uint8_t ramCmd, uint8_t fillByte);
   // Load all 5 LUT registers (VCOM/WW/BW/WB/BB) in one call. Each pointer
   // must reference a 42-byte LUT bank in PROGMEM/DRAM.
   void loadLutBankX3(const uint8_t* vcom, const uint8_t* ww,
