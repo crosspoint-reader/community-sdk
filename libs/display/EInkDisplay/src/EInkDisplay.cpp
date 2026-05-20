@@ -746,7 +746,8 @@ void EInkDisplay::initDisplayController() {
       sendCommand(CMD_X3_DTM2);
       sendData(frameBuffer, static_cast<uint16_t>(bufferSize));
       sendCommand(CMD_X3_DATA_STOP); // commit DTM2 — same reason
-      memset(frameBuffer, 0x00, bufferSize);
+      // Leave frameBuffer at 0xFF (white) so it matches the RAM state we
+      // just wrote and matches begin()'s earlier memset(frameBuffer0, 0xFF).
     }
 
     isScreenOn = false;
