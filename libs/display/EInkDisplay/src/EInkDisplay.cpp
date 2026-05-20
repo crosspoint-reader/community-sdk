@@ -938,8 +938,10 @@ void EInkDisplay::cleanupGrayscaleBuffers(const uint8_t *bwBuffer) {
 #endif
 
 void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
-  if (!_x3Mode && !isScreenOn && !turnOffScreen) {
-    // Force half refresh if screen is off (non-X3 only)
+  if (!isScreenOn && !turnOffScreen) {
+    // Waking the panel from off: force HALF refresh so the wake transition
+    // gets a stronger waveform than a fast differential, matching the X4
+    // policy. Applies to both X4 and X3.
     mode = HALF_REFRESH;
   }
 
