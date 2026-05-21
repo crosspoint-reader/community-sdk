@@ -58,14 +58,14 @@ class EInkDisplay {
   // behind tiled grayscale). `plane` selects LSB/MSB RAM; `rows` points at
   // `numRows` physical rows (displayWidthBytes wide) whose top is logical
   // `yStart`. X4 writes each band as an independent windowed RAM write via
-  // setRamArea, so bands may be streamed in any order. X3 (UC81xx) windowing
-  // via PTL is a follow-up; this is validated on X4 first.
+  // setRamArea; X3 (UC81xx) windows each band via PTL. Either way bands may be
+  // streamed in any order.
   enum GrayPlane { GRAY_PLANE_LSB, GRAY_PLANE_MSB };
   void writeGrayscalePlaneStrip(GrayPlane plane, const uint8_t* rows, uint16_t yStart, uint16_t numRows);
 
-  // True when the tiled/strip grayscale path is supported (X4 SSD1677). X3
-  // (UC81xx) still uses the full-plane copy* path until PTL strip writes land.
-  bool supportsStripGrayscale() const { return !_x3Mode; }
+  // True when the tiled/strip grayscale path is supported. X4 (SSD1677) windows
+  // each band via setRamArea; X3 (UC81xx) windows via PTL. Both implemented.
+  bool supportsStripGrayscale() const { return true; }
 #ifdef EINK_DISPLAY_SINGLE_BUFFER_MODE
   void cleanupGrayscaleBuffers(const uint8_t* bwBuffer);
 #endif
