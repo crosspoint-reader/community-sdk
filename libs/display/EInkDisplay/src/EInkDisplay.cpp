@@ -1477,15 +1477,15 @@ void EInkDisplay::displayGrayBuffer(const bool turnOffScreen,
     // LUT registers on X3 but CTRL/activation commands on X4. The X4 path
     // (setCustomLUT + refreshDisplay) cannot be used on X3.
     drawGrayscale = false;
+    if (!_x3GrayState.lsbValid) {
+      return;
+    }
+
     // Match X4 semantics: differential grayscale leaves the gray bank loaded
     // in the LUT registers, so a subsequent BW page turn must run
     // grayscaleRevert first to drive pixels back to clean BW. Factory
     // absolute mode handles its own cleanup, so no revert is needed there.
     inGrayscaleMode = !factoryMode;
-
-    if (!_x3GrayState.lsbValid) {
-      return;
-    }
 
     if (factoryMode) {
       // Factory absolute mode - use image/factory LUTs.
