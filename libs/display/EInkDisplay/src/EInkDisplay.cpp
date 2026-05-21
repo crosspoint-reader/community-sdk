@@ -583,11 +583,17 @@ void EInkDisplay::sendData(const uint8_t *data, uint16_t length) {
 }
 
 // ---- X3 (UC81xx) primitives ----------------------------------------------
-// These mirror the OEM driver pattern: command + optional inline data
-// payload in a single CS-low SPI transaction. The X4 path uses separate
-// sendCommand() / sendData() calls (SSD1677 doesn't care); the X3
-// controller appears to be picky about command/data atomicity for some
-// operations, so we keep them fused.
+// `sendCommandDataX3` / `sendCommandDataByteX3` bundle a command byte and a
+// short data payload into a single CS-low SPI transaction. Used for LUT
+// register writes (cmd 0x20-0x24 + 42 bytes), mode select (cmd 0x50 + 2
+// bytes), and partial-window descriptors (cmd 0x90 + 9 bytes). Saves one
+// CS toggle vs the separated form.
+//
+// The bulk plane-write helpers (`sendPlaneX3`, `fillPlaneX3`) and the init
+// RAM-clear use the separated `sendCommand()` + `sendData()` form instead.
+// UC81xx accepts both for DTM1/DTM2 streams; the separation makes the
+// in-place Y-flip and row-streaming patterns simpler to express. This is
+// not a hard atomicity requirement of the controller.
 
 void EInkDisplay::sendCommandDataX3(uint8_t cmd, const uint8_t *data,
                                     uint16_t len) {

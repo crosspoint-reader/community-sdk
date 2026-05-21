@@ -150,9 +150,12 @@ class EInkDisplay {
   void writeRamBuffer(uint8_t ramBuffer, const uint8_t* data, uint32_t size);
 
   // X3 (UC81xx) primitives. Promoted from inline lambdas that used to be
-  // redefined in displayBuffer / displayGrayBuffer / grayscaleRevert. Each
-  // is a thin wrapper over sendCommand+sendData but uses one CS-low SPI
-  // transaction (the UC81xx command-then-data pattern OEM firmware uses).
+  // redefined in displayBuffer / displayGrayBuffer / grayscaleRevert. These
+  // fuse a command byte and a short data payload into one CS-low SPI
+  // transaction — used for LUT register / mode-select / partial-window
+  // writes where the payload is small. Bulk plane writes go through
+  // sendPlaneX3/fillPlaneX3 (separated sendCommand+sendData). Not an
+  // atomicity requirement, just convenience.
   void sendCommandDataX3(uint8_t cmd, const uint8_t* data, uint16_t len);
   void sendCommandDataByteX3(uint8_t cmd, uint8_t d0, uint8_t d1);
   // Bulk-write a pixel plane to one of the DTM RAM commands. Y-flips rows
