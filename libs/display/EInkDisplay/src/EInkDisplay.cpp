@@ -1120,6 +1120,29 @@ void EInkDisplay::copyGrayscaleBuffers(const uint8_t *lsbBuffer,
   writeRamBuffer(CMD_WRITE_RAM_RED, msbBuffer, bufferSize);
 }
 
+void EInkDisplay::writeGrayscalePlaneStrip(GrayPlane plane, const uint8_t *rows,
+                                           uint16_t yStart, uint16_t numRows) {
+  if (!rows || numRows == 0)
+    return;
+
+  if (_x3Mode) {
+    // TODO(x3): UC81xx partial-window (PTL 0x90) strip write. The tiled path is
+    // being brought up on X4 first; X3 still uses the full-plane copy* path.
+    return;
+  }
+
+  // X4 (SSD1677): window the RAM to just this band and write it. setRamArea
+  // already maps logical y to the panel's reversed gates, and a band written
+  // here lands at the same RAM rows the full-frame write would use for those
+  // rows, so bands compose in any order with no reordering.
+  const uint8_t ramCmd =
+      (plane == GRAY_PLANE_LSB) ? CMD_WRITE_RAM_BW : CMD_WRITE_RAM_RED;
+  setRamArea(0, yStart, displayWidth, numRows);
+  sendCommand(ramCmd);
+  sendData(rows, static_cast<uint16_t>(static_cast<uint32_t>(numRows) *
+                                       displayWidthBytes));
+}
+
 #ifdef EINK_DISPLAY_SINGLE_BUFFER_MODE
 /**
  * In single buffer mode, this should be called with the previously written BW
