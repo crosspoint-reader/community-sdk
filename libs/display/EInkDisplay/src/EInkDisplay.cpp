@@ -280,44 +280,61 @@ const uint8_t lut_x3_bb_grayscale[] PROGMEM = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 
-// X3 stock image-write LUTs — extracted from OEM firmware
-// V5.1.6-X3-EN-PROD-0304_.bin at offset 0x433d40.
-//
-// Byte-for-byte equivalent to the X4 lut_factory_quality VS patterns,
-// repacked into the X3 controller's 5-cell layout. Each cell drives one
-// of the four 2-bit grey states selected by the (RAM 0x10, RAM 0x13) bit
-// pair on a per-pixel basis:
-//   BB (state 00): black drive
-//   BW (state 01): dark grey drive
-//   WB (state 10): light grey drive
-//   WW (state 11): white drive
-// VCOM provides the common electrode modulation across all transitions.
-//
-// Used by displayBuffer() for OEM full-sync image refresh, and by
-// displayGrayBuffer() for 4-level grayscale rendering.
+// X3 stock full/quality image-write LUTs — extracted from OEM firmware
+// V5.6.21-X3-EN-PROD-0519_180550.bin at flash offset 0x402b28.
+// OEM loaders set CDI 0x29,0x07 before loading this bank.
 const uint8_t lut_x3_vcom_full[] PROGMEM = {
-    0x00, 0x08, 0x0B, 0x02, 0x03, 0x01, 0x00, 0x0C, 0x02, 0x07, 0x02,
-    0x01, 0x00, 0x01, 0x00, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x18, 0x04, 0x0E, 0x0A, 0x01, 0x00, 0x0A, 0x00, 0x00, 0x00,
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 const uint8_t lut_x3_ww_full[] PROGMEM = {
-    0xA8, 0x08, 0x0B, 0x02, 0x03, 0x01, 0x44, 0x0C, 0x02, 0x07, 0x02,
-    0x01, 0x04, 0x01, 0x00, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+    0x4A, 0x18, 0x04, 0x0E, 0x0A, 0x01, 0x00, 0x0A, 0x00, 0x00, 0x00,
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 const uint8_t lut_x3_bw_full[] PROGMEM = {
-    0x80, 0x08, 0x0B, 0x02, 0x03, 0x01, 0x62, 0x0C, 0x02, 0x07, 0x02,
-    0x01, 0x00, 0x01, 0x00, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+    0x0A, 0x18, 0x04, 0x0E, 0x0A, 0x01, 0x00, 0x0A, 0x00, 0x00, 0x00,
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 const uint8_t lut_x3_wb_full[] PROGMEM = {
-    0x88, 0x08, 0x0B, 0x02, 0x03, 0x01, 0x60, 0x0C, 0x02, 0x07, 0x02,
-    0x01, 0x00, 0x01, 0x00, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+    0x04, 0x18, 0x04, 0x0E, 0x0A, 0x01, 0x40, 0x0A, 0x00, 0x00, 0x00,
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 const uint8_t lut_x3_bb_full[] PROGMEM = {
-    0x00, 0x08, 0x0B, 0x02, 0x03, 0x01, 0x4A, 0x0C, 0x02, 0x07, 0x02,
-    0x01, 0x88, 0x01, 0x00, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+    0x84, 0x18, 0x04, 0x0E, 0x0A, 0x01, 0x40, 0x0A, 0x00, 0x00, 0x00,
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+
+// X3 OEM GC (grayscale/anti-aliased text) LUTs from V5.6.21 at flash
+// offset 0x402f74. OEM sets CDI 0x97 before loading this bank, triggers a
+// refresh, then leaves CDI at 0xD7 afterward.
+const uint8_t lut_x3_vcom_gc[] PROGMEM = {
+    0x01, 0x1A, 0x1A, 0x01, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+const uint8_t lut_x3_ww_gc[] PROGMEM = {
+    0x01, 0x5A, 0x9A, 0x01, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+const uint8_t lut_x3_bw_gc[] PROGMEM = {
+    0x01, 0x1A, 0x9A, 0x01, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+const uint8_t lut_x3_wb_gc[] PROGMEM = {
+    0x01, 0x1A, 0x5A, 0x01, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+const uint8_t lut_x3_bb_gc[] PROGMEM = {
+    0x01, 0x9A, 0x5A, 0x01, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 
@@ -609,6 +626,11 @@ void EInkDisplay::sendCommandDataX3(uint8_t cmd, const uint8_t *data,
   SPI.endTransaction();
 }
 
+void EInkDisplay::sendCommandDataByteX3(uint8_t cmd, uint8_t d0) {
+  const uint8_t d[1] = {d0};
+  sendCommandDataX3(cmd, d, 1);
+}
+
 void EInkDisplay::sendCommandDataByteX3(uint8_t cmd, uint8_t d0, uint8_t d1) {
   const uint8_t d[2] = {d0, d1};
   sendCommandDataX3(cmd, d, 2);
@@ -667,6 +689,21 @@ void EInkDisplay::loadLutBankX3(const uint8_t *vcom, const uint8_t *ww,
   sendCommandDataX3(CMD_X3_LUT_BW,   bw,   42);
   sendCommandDataX3(CMD_X3_LUT_WB,   wb,   42);
   sendCommandDataX3(CMD_X3_LUT_BB,   bb,   42);
+}
+
+void EInkDisplay::loadLutBankX3WithCdi(uint8_t cdi0, const uint8_t *vcom,
+                                       const uint8_t *ww, const uint8_t *bw,
+                                       const uint8_t *wb, const uint8_t *bb) {
+  sendCommandDataByteX3(CMD_X3_VCOM_DATA_INTERVAL, cdi0);
+  loadLutBankX3(vcom, ww, bw, wb, bb);
+}
+
+void EInkDisplay::loadLutBankX3WithCdi(uint8_t cdi0, uint8_t cdi1,
+                                       const uint8_t *vcom,
+                                       const uint8_t *ww, const uint8_t *bw,
+                                       const uint8_t *wb, const uint8_t *bb) {
+  sendCommandDataByteX3(CMD_X3_VCOM_DATA_INTERVAL, cdi0, cdi1);
+  loadLutBankX3(vcom, ww, bw, wb, bb);
 }
 
 void EInkDisplay::triggerRefreshX3(bool turnOffScreen, const char *tag) {
@@ -982,9 +1019,12 @@ void EInkDisplay::grayscaleRevert() {
     sendCommand(CMD_X3_DATA_STOP);
     fillPlaneX3(CMD_X3_DTM2, 0xFF);
     sendCommand(CMD_X3_DATA_STOP);
-    loadLutBankX3(lut_x3_vcom_half, lut_x3_ww_half, lut_x3_bw_half,
-                  lut_x3_wb_half,   lut_x3_bb_half);
-    sendCommandDataByteX3(CMD_X3_VCOM_DATA_INTERVAL, 0x29, 0x07);
+    // CDI 0xA9 (absolute mode) — _half bank was extracted from OEM's
+    // scrub/half loader (FUN_420a0e7c) which sets CDI 0xA9 before loading
+    // these exact bytes. Using 0x29 (differential) here caused the controller
+    // to misinterpret pixel state codes and drove unbalanced charge per pixel.
+    loadLutBankX3WithCdi(0xA9, 0x07, lut_x3_vcom_half, lut_x3_ww_half,
+                         lut_x3_bw_half, lut_x3_wb_half, lut_x3_bb_half);
     triggerRefreshX3(/*turnOffScreen=*/false, "(revert)");
     _x3RedRamSynced = true;
     return;
@@ -1155,9 +1195,9 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
     //     residue in DTM1. Used for the reader's periodic ghosting-cleanup
     //     cadence (`displayWithRefreshCycle`, every N pages). Faster than
     //     a full sync because it's still single-phase 1-bit-per-pixel.
-    //   FULL_REFRESH -> `_full` absolute (24+10-frame two-phase). Strongest
-    //     drive, used at boot, after wake, and when the caller explicitly
-    //     requests it. Also forced when DTM1 is unsynced (after AA).
+    //   FULL_REFRESH -> `_full` OEM quality bank from a white baseline.
+    //     Strongest drive, used at boot, after wake, and when the caller
+    //     explicitly requests it. Also forced when DTM1 is unsynced (after AA).
     //
     // DTM1 ("old" RAM) on the controller stores the previous frame for
     // differential updates. POWER_ON (0x04) re-powers the charge pump when
@@ -1177,26 +1217,41 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
     _x3GrayState.lastBaseWasPartial = !doFullSync;
 
     if (doFullSync) {
-      loadLutBankX3(lut_x3_vcom_full, lut_x3_ww_full, lut_x3_bw_full,
-                    lut_x3_wb_full,   lut_x3_bb_full);
-      sendPlaneX3(CMD_X3_DTM2, frameBuffer, true);
-      sendPlaneX3(CMD_X3_DTM1, frameBuffer, true);
-      sendCommandDataByteX3(CMD_X3_VCOM_DATA_INTERVAL, 0xA9, 0x07);
-    } else if (doHalfSync) {
-      // Half: scrub LUTs (state-collapsed) drive every pixel to its target
-      // in DTM2 regardless of DTM1, clearing accumulated turbo residue.
-      // DTM1 still gets re-synced at the end of this function so the next
-      // fast diff has a clean prior frame.
-      loadLutBankX3(lut_x3_vcom_half, lut_x3_ww_half, lut_x3_bw_half,
-                    lut_x3_wb_half,   lut_x3_bb_half);
+      loadLutBankX3WithCdi(0x29, 0x07, lut_x3_vcom_full, lut_x3_ww_full,
+                           lut_x3_bw_full, lut_x3_wb_full, lut_x3_bb_full);
+      // Plane semantics for `_full` in differential mode: DTM1 holds the
+      // "old" frame, DTM2 holds the "new" frame, and the controller diffs
+      // them per pixel to pick the transition LUT (WW/BW/WB/BB).
+      //
+      // OEM writes old → DTM1 and new → DTM2 from a stored previous frame.
+      // We don't keep a software previous-frame buffer (would cost ~60 KB
+      // on a memory-constrained C3), so we use an all-white baseline in
+      // DTM1 instead. Differential interpretation becomes "drive every
+      // pixel from white to its current target" — black-target pixels get
+      // the strong WB transition drive (cleans ghost residue), white-target
+      // pixels get a light WW drive (no work needed). That's the classic
+      // ghost-buster full refresh.
+      //
+      // The post-refresh DTM1 sync at the end of this function updates
+      // DTM1 to the current frame so subsequent fast diffs work normally.
+      fillPlaneX3(CMD_X3_DTM1, 0xFF);
+      sendCommand(CMD_X3_DATA_STOP);
       sendPlaneX3(CMD_X3_DTM2, frameBuffer, false);
-      sendCommandDataByteX3(CMD_X3_VCOM_DATA_INTERVAL, 0x29, 0x07);
+    } else if (doHalfSync) {
+      // Half: _half (scrub) LUTs in absolute mode. WW=BW and WB=BB in this
+      // bank, so the controller picks waveform per-pixel from the target
+      // state code in DTM2/DTM1 — drive every pixel to its target
+      // regardless of accumulated residue. OEM uses CDI 0xA9 with this
+      // bank (FUN_420a0e7c); using 0x29 here caused unbalanced drive that
+      // accumulated DC bias per pixel under repeated use.
+      loadLutBankX3WithCdi(0xA9, 0x07, lut_x3_vcom_half, lut_x3_ww_half,
+                           lut_x3_bw_half, lut_x3_wb_half, lut_x3_bb_half);
+      sendPlaneX3(CMD_X3_DTM2, frameBuffer, false);
     } else {
       // Fast differential: turbo LUTs, DTM1 retains previous frame.
-      loadLutBankX3(lut_x3_vcom_fast, lut_x3_ww_fast, lut_x3_bw_fast,
-                    lut_x3_wb_fast,   lut_x3_bb_fast);
+      loadLutBankX3WithCdi(0x29, 0x07, lut_x3_vcom_fast, lut_x3_ww_fast,
+                           lut_x3_bw_fast, lut_x3_wb_fast, lut_x3_bb_fast);
       sendPlaneX3(CMD_X3_DTM2, frameBuffer, false);
-      sendCommandDataByteX3(CMD_X3_VCOM_DATA_INTERVAL, 0x29, 0x07);
     }
 
     // Note: this branch re-issues POWER_ON when doFullSync is true even if
@@ -1245,9 +1300,11 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
                             static_cast<uint8_t>(yEnd & 0xFF),
                             0x01};
 
-      loadLutBankX3(lut_x3_vcom_normal, lut_x3_ww_normal, lut_x3_bw_normal,
-                    lut_x3_wb_normal,   lut_x3_bb_normal);
-      sendCommandDataByteX3(CMD_X3_VCOM_DATA_INTERVAL, 0x29, 0x07);
+      // CDI 0xA9 (absolute) — _normal bank was extracted from OEM's
+      // normal loader (FUN_420a12a0) which sets CDI 0xA9 before loading.
+      loadLutBankX3WithCdi(0xA9, 0x07, lut_x3_vcom_normal,
+                           lut_x3_ww_normal, lut_x3_bw_normal,
+                           lut_x3_wb_normal, lut_x3_bb_normal);
 
       for (uint8_t i = 0; i < postConditionPasses; i++) {
         if (Serial)
@@ -1440,19 +1497,24 @@ void EInkDisplay::displayGrayBuffer(const bool turnOffScreen,
                                   : "factory_quality";
         Serial.printf("[%lu]   X3_GRAY_MODE=%s\n", millis(), modeTag);
       }
-      loadLutBankX3(lut_x3_vcom_full, lut_x3_ww_full, lut_x3_bw_full,
-                    lut_x3_wb_full,   lut_x3_bb_full);
-      sendCommandDataByteX3(CMD_X3_VCOM_DATA_INTERVAL, 0xA9, 0x07);
+      // CDI 0x29 (differential) — _full bank's OEM CDI is 0x29 per
+      // FUN_420a1218 / FUN_420a14a0. Factory-mode grayscale loaders in the
+      // OEM firmware use this same bank with the same CDI.
+      loadLutBankX3WithCdi(0x29, 0x07, lut_x3_vcom_full, lut_x3_ww_full,
+                           lut_x3_bw_full, lut_x3_wb_full, lut_x3_bb_full);
     } else {
       // Differential grayscale mode
       if (Serial)
-        Serial.printf("[%lu]   X3_GRAY_MODE=diff_gray\n", millis());
-      loadLutBankX3(lut_x3_vcom_grayscale, lut_x3_ww_grayscale, lut_x3_bw_grayscale,
-                    lut_x3_wb_grayscale,   lut_x3_bb_grayscale);
-      sendCommandDataByteX3(CMD_X3_VCOM_DATA_INTERVAL, 0x29, 0x07);
+        Serial.printf("[%lu]   X3_GRAY_MODE=oem_gc\n", millis());
+      loadLutBankX3WithCdi(0x97, lut_x3_vcom_gc, lut_x3_ww_gc,
+                           lut_x3_bw_gc, lut_x3_wb_gc, lut_x3_bb_gc);
     }
 
     triggerRefreshX3(turnOffScreen, "(gray)");
+    if (!factoryMode) {
+      // OEM's GC path leaves CDI at 0xD7 after the grayscale refresh.
+      sendCommandDataByteX3(CMD_X3_VCOM_DATA_INTERVAL, 0xD7);
+    }
 
     _x3RedRamSynced = false;
     _x3ForceFullSyncNext = false;

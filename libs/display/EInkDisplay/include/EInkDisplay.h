@@ -157,6 +157,7 @@ class EInkDisplay {
   // sendPlaneX3/fillPlaneX3 (separated sendCommand+sendData). Not an
   // atomicity requirement, just convenience.
   void sendCommandDataX3(uint8_t cmd, const uint8_t* data, uint16_t len);
+  void sendCommandDataByteX3(uint8_t cmd, uint8_t d0);
   void sendCommandDataByteX3(uint8_t cmd, uint8_t d0, uint8_t d1);
   // Bulk-write a pixel plane to one of the DTM RAM commands. Y-flips rows
   // in-place (X3 controller scans gates upward), optionally inverts bits
@@ -170,6 +171,13 @@ class EInkDisplay {
   void loadLutBankX3(const uint8_t* vcom, const uint8_t* ww,
                      const uint8_t* bw, const uint8_t* wb,
                      const uint8_t* bb);
+  void loadLutBankX3WithCdi(uint8_t cdi0, const uint8_t* vcom,
+                            const uint8_t* ww, const uint8_t* bw,
+                            const uint8_t* wb, const uint8_t* bb);
+  void loadLutBankX3WithCdi(uint8_t cdi0, uint8_t cdi1,
+                            const uint8_t* vcom, const uint8_t* ww,
+                            const uint8_t* bw, const uint8_t* wb,
+                            const uint8_t* bb);
   // Power-on if needed, trigger refresh, optionally power-off. The `tag`
   // string is included verbatim in busy-wait log lines.
   void triggerRefreshX3(bool turnOffScreen, const char* tag);
