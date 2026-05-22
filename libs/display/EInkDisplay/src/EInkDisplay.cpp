@@ -1263,7 +1263,6 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
     const bool forcedFullSync = _x3ForceFullSyncNext;
     const bool doFullSync = (!fastMode && !halfMode) || !_x3RedRamSynced ||
                             _x3InitialFullSyncsRemaining > 0 || forcedFullSync;
-    // Half mode only applies if we're not already being promoted to full.
     const bool doHalfSync = halfMode && !doFullSync;
 
     if (Serial) {
@@ -1379,6 +1378,21 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
     sendPlaneX3(CMD_X3_DTM1, frameBuffer, false);
     sendCommand(CMD_X3_DATA_STOP); // commit DTM1 — no refresh follows
     _x3RedRamSynced = true;
+
+    // The first differential after a full garbles on X3: the controller's post-full state corrupts
+    // the next fast/half diff (not a DTM1-content issue; promoting that op to a half didn't help, a
+    // full did). Spend that slot here with a no-op fast of the just-displayed frame. DTM1 and DTM2
+    // both hold it, so nothing visibly changes, but it leaves the controller in the post-fast state
+    // so the caller's next diff (menu open, first page turn, first turn after the periodic full) is
+    // clean instead of the garbling first-after-full.
+    if (doFullSync) {
+      loadLutBankX3WithCdi(0x29, 0x07, lut_x3_vcom_fast, lut_x3_ww_fast, lut_x3_bw_fast, lut_x3_wb_fast,
+                           lut_x3_bb_fast);
+      sendPlaneX3(CMD_X3_DTM2, frameBuffer, false);
+      triggerRefreshX3(turnOffScreen, "(post-full settle)");
+      sendPlaneX3(CMD_X3_DTM1, frameBuffer, false);
+      sendCommand(CMD_X3_DATA_STOP);
+    }
 
     if (doFullSync && _x3InitialFullSyncsRemaining > 0) {
       _x3InitialFullSyncsRemaining--;
