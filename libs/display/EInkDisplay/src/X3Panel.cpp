@@ -430,12 +430,14 @@ void X3Panel::pollBusy(EInkDisplay& d, const char* comment, const char* complete
   bool sawLow = false;
   while (digitalRead(d._busy) == HIGH) {
     delay(1);
+    EInkDisplay::tickIdleHook();
     if (millis() - start > 1000) break;
   }
   if (digitalRead(d._busy) == LOW) {
     sawLow = true;
     while (digitalRead(d._busy) == LOW) {
       delay(1);
+      EInkDisplay::tickIdleHook();
       if (millis() - start > 30000) break;
     }
   }

@@ -295,6 +295,7 @@ void X4Panel::pollBusy(EInkDisplay& d, const char* comment, const char* complete
   unsigned long start = millis();
   while (digitalRead(d._busy) == HIGH) {
     delay(1);
+    EInkDisplay::tickIdleHook();
     if (millis() - start > 30000) break;
   }
   if (comment && Serial) {

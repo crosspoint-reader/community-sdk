@@ -11,6 +11,15 @@
 
 void EInkDisplay::setDisplayX3() { _panel = std::make_unique<X3Panel>(); }
 
+// Refresh-wait idle hook — single slot, see setIdleHook header comment.
+EInkDisplay::IdleHook EInkDisplay::_idleHook = nullptr;
+void* EInkDisplay::_idleHookCtx = nullptr;
+
+void EInkDisplay::setIdleHook(IdleHook hook, void* ctx) {
+  _idleHook = hook;
+  _idleHookCtx = ctx;
+}
+
 void EInkDisplay::requestResync(uint8_t settlePasses) { _panel->requestResync(settlePasses); }
 
 void EInkDisplay::skipInitialResync() { _panel->skipInitialResync(); }
