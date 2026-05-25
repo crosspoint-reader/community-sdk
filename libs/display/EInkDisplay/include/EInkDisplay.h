@@ -2,22 +2,39 @@
 #include <Arduino.h>
 #include <SPI.h>
 
+#include <memory>
+
+#include "Panel.h"
+#include "X3Panel.h"
+
 class EInkDisplay {
+  friend class X3Panel;  // grants X3-side helpers access to SPI/pin/state privates
+  friend class X4Panel;  // ditto for X4-side panel logic
+
  public:
-  // Constructor with pin configuration
+  // Preferred constructor: inject the panel at construction time.
+  // Example:
+  //   EInkDisplay d(std::make_unique<X3Panel>(), sclk, mosi, cs, dc, rst, busy);
+  //   EInkDisplay d(std::make_unique<X4Panel>(), sclk, mosi, cs, dc, rst, busy);
+  // `panel` must be non-null; ownership transfers to the display.
+  EInkDisplay(std::unique_ptr<Panel> panel, int8_t sclk, int8_t mosi, int8_t cs, int8_t dc, int8_t rst, int8_t busy);
+
+  // Legacy constructor. Defaults the panel to X4Panel so code that
+  // expects to call setDisplayX3() after construction still works.
+  // New code should use the panel-injecting constructor above;
+  // setDisplayX3() is deprecated.
   EInkDisplay(int8_t sclk, int8_t mosi, int8_t cs, int8_t dc, int8_t rst, int8_t busy);
 
   // Destructor
   ~EInkDisplay() = default;
 
-  // Refresh modes (guarded to avoid redefinition in test builds)
-  enum RefreshMode {
-    FULL_REFRESH,  // Full refresh with complete waveform
-    HALF_REFRESH,  // Half refresh (1720ms) - balanced quality and speed
-    FAST_REFRESH   // Fast refresh using custom LUT
-  };
+  // RefreshMode lives in Panel.h; reach via the qualified name.
 
-  // Set X3 panel geometry and mode (must be called before begin())
+  // Set X3 panel geometry and mode (must be called before begin()).
+  // Deprecated: pass the panel to the constructor instead. Kept as a
+  // shim so existing callers can migrate at their own pace.
+  [[deprecated(
+      "Inject the panel at construction: EInkDisplay(std::make_unique<X3Panel>(), sclk, mosi, cs, dc, rst, busy)")]]
   void setDisplayX3();
 
   // Initialize the display hardware and driver
@@ -34,16 +51,18 @@ class EInkDisplay {
   static constexpr uint32_t X3_BUFFER_SIZE = X3_DISPLAY_WIDTH_BYTES * X3_DISPLAY_HEIGHT;
   static constexpr uint32_t MAX_BUFFER_SIZE = 52272;  // max(800x480, 792x528) / 8
 
-  // Runtime dimensions
-  uint16_t getDisplayWidth() const { return displayWidth; }
-  uint16_t getDisplayHeight() const { return displayHeight; }
-  uint16_t getDisplayWidthBytes() const { return displayWidthBytes; }
-  uint32_t getBufferSize() const { return bufferSize; }
+  // Runtime dimensions (delegate to active panel)
+  uint16_t getDisplayWidth() const { return _panel->displayWidth(); }
+  uint16_t getDisplayHeight() const { return _panel->displayHeight(); }
+  uint16_t getDisplayWidthBytes() const { return _panel->displayWidthBytes(); }
+  uint32_t getBufferSize() const { return _panel->bufferSize(); }
 
   // Frame buffer operations
   void clearScreen(uint8_t color = 0xFF) const;
-  void drawImage(const uint8_t* imageData, uint16_t x, uint16_t y, uint16_t w, uint16_t h, bool fromProgmem = false) const;
-  void drawImageTransparent(const uint8_t* imageData, uint16_t x, uint16_t y, uint16_t w, uint16_t h, bool fromProgmem = false) const;
+  void drawImage(const uint8_t* imageData, uint16_t x, uint16_t y, uint16_t w, uint16_t h,
+                 bool fromProgmem = false) const;
+  void drawImageTransparent(const uint8_t* imageData, uint16_t x, uint16_t y, uint16_t w, uint16_t h,
+                            bool fromProgmem = false) const;
 #ifndef EINK_DISPLAY_SINGLE_BUFFER_MODE
   void swapBuffers();
 #endif
@@ -60,7 +79,7 @@ class EInkDisplay {
   // `yStart`. X4 writes each band as an independent windowed RAM write via
   // setRamArea; X3 (UC81xx) windows each band via PTL. Either way bands may be
   // streamed in any order.
-  enum GrayPlane { GRAY_PLANE_LSB, GRAY_PLANE_MSB };
+  // GrayPlane lives in Panel.h; reach via the qualified name.
   void writeGrayscalePlaneStrip(GrayPlane plane, const uint8_t* rows, uint16_t yStart, uint16_t numRows);
 
   // True when the tiled/strip grayscale path is supported. X4 (SSD1677) windows
@@ -70,12 +89,12 @@ class EInkDisplay {
   void cleanupGrayscaleBuffers(const uint8_t* bwBuffer);
 #endif
 
-  void displayBuffer(RefreshMode mode = FAST_REFRESH, bool turnOffScreen = false);
+  void displayBuffer(RefreshMode mode = RefreshMode::FAST_REFRESH, bool turnOffScreen = false);
   // EXPERIMENTAL: Windowed update - display only a rectangular region
   void displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h, bool turnOffScreen = false);
   void displayGrayBuffer(bool turnOffScreen = false, const unsigned char* lut = nullptr, bool factoryMode = false);
 
-  void refreshDisplay(RefreshMode mode = FAST_REFRESH, bool turnOffScreen = false);
+  void refreshDisplay(RefreshMode mode = RefreshMode::FAST_REFRESH, bool turnOffScreen = false);
 
   // Hint the X3 policy to run a one-shot full resync on next update.
   void requestResync(uint8_t settlePasses = 0);
@@ -96,35 +115,20 @@ class EInkDisplay {
   void deepSleep();
 
   // Access to frame buffer
-  uint8_t* getFrameBuffer() const {
-    return frameBuffer;
-  }
+  uint8_t* getFrameBuffer() const { return frameBuffer; }
 
   // Save the current framebuffer to a PBM file (desktop/test builds only)
   void saveFrameBufferAsPBM(const char* filename);
 
  private:
-  // Internal geometry setter used by setDisplayX3().
-  void setDisplayDimensions(uint16_t width, uint16_t height);
-
   // Pin configuration
   int8_t _sclk, _mosi, _cs, _dc, _rst, _busy;
 
-  // Runtime display geometry
-  uint16_t displayWidth = DISPLAY_WIDTH;
-  uint16_t displayHeight = DISPLAY_HEIGHT;
-  uint16_t displayWidthBytes = DISPLAY_WIDTH_BYTES;
-  uint32_t bufferSize = BUFFER_SIZE;
-  bool _x3Mode = false;
-  bool _x3RedRamSynced = false;
-  struct X3GrayState {
-    bool lastBaseWasPartial = false;
-    bool lsbValid = false;
-  };
-  X3GrayState _x3GrayState;
-  uint8_t _x3InitialFullSyncsRemaining = 0;
-  bool _x3ForceFullSyncNext = false;
-  uint8_t _x3ForcedConditionPassesNext = 0;
+  // Active panel: source of truth for all per-device behavior.
+  // Set by each constructor (X4Panel default for the legacy form,
+  // caller-supplied for the panel-injecting form). Never null after
+  // construction; the deprecated setDisplayX3() shim swaps it in place.
+  std::unique_ptr<Panel> _panel;
   // Frame buffer (statically allocated)
   uint8_t frameBuffer0[MAX_BUFFER_SIZE];
   uint8_t* frameBuffer;
@@ -149,13 +153,9 @@ class EInkDisplay {
   void sendData(const uint8_t* data, uint16_t length);
   void waitForRefresh(const char* comment = nullptr);
   void waitWhileBusy(const char* comment = nullptr);
-  // Shared body for the two waits above. X4 (SSD1677) and X3 (UC81xx-class)
-  // use opposite BUSY-line polarities:
-  //   X4: active HIGH. BUSY HIGH while working, drops LOW when done.
-  //   X3: active LOW.  BUSY HIGH when idle, drops LOW while working, returns
-  //                    HIGH when done.
-  // The per-panel polling logic therefore stays gated; consolidation here
-  // is the function body only.
+  // Delegates to Panel::pollBusy. Wait policy (X4 single-phase active-HIGH
+  // vs X3 two-phase active-LOW with sawLow early-return) lives on each
+  // Panel subclass.
   void pollBusy(const char* comment, const char* completeWord);
   void initDisplayController();
 
@@ -163,42 +163,10 @@ class EInkDisplay {
   void setRamArea(uint16_t x, uint16_t y, uint16_t w, uint16_t h);
   void writeRamBuffer(uint8_t ramBuffer, const uint8_t* data, uint32_t size);
 
-  // X3 (UC81xx) primitives. Promoted from inline lambdas that used to be
-  // redefined in displayBuffer / displayGrayBuffer / grayscaleRevert. These
-  // fuse a command byte and a short data payload into one CS-low SPI
-  // transaction — used for LUT register / mode-select / partial-window
-  // writes where the payload is small. Bulk plane writes go through
-  // sendPlaneX3/fillPlaneX3 (separated sendCommand+sendData). Not an
-  // atomicity requirement, just convenience.
-  void sendCommandDataX3(uint8_t cmd, const uint8_t* data, uint16_t len);
-  void sendCommandDataByteX3(uint8_t cmd, uint8_t d0);
-  void sendCommandDataByteX3(uint8_t cmd, uint8_t d0, uint8_t d1);
-  // Bulk-write a pixel plane to one of the DTM RAM commands. Y-flips rows
-  // in-place (X3 controller scans gates upward), optionally inverts bits
-  // before sending, then restores the buffer.
-  void sendPlaneX3(uint8_t ramCmd, uint8_t* buf, bool invert);
-  // Fill an entire RAM plane with a single byte (e.g., 0xFF for white).
-  // Streams a small row buffer repeatedly so the framebuffer isn't touched.
-  void fillPlaneX3(uint8_t ramCmd, uint8_t fillByte);
-  // Load all 5 LUT registers (VCOM/WW/BW/WB/BB) in one call. Each pointer
-  // must reference a 42-byte LUT bank in PROGMEM/DRAM.
-  void loadLutBankX3(const uint8_t* vcom, const uint8_t* ww,
-                     const uint8_t* bw, const uint8_t* wb,
-                     const uint8_t* bb);
-  void loadLutBankX3WithCdi(uint8_t cdi0, const uint8_t* vcom,
-                            const uint8_t* ww, const uint8_t* bw,
-                            const uint8_t* wb, const uint8_t* bb);
-  void loadLutBankX3WithCdi(uint8_t cdi0, uint8_t cdi1,
-                            const uint8_t* vcom, const uint8_t* ww,
-                            const uint8_t* bw, const uint8_t* wb,
-                            const uint8_t* bb);
-  // Power-on if needed, trigger refresh, optionally power-off. The `tag`
-  // string is included verbatim in busy-wait log lines.
-  void triggerRefreshX3(bool turnOffScreen, const char* tag);
 };
 
 // Factory LUTs extracted from firmware V3.1.9_CH_X4_0117.bin.
 // Uses absolute 2-bit pixel encoding for single-pass grayscale refresh.
 // See EInkDisplay.cpp for encoding details.
-extern const unsigned char lut_factory_fast[];    // 110 bytes, 60 frames, FR=0x44
+extern const unsigned char lut_factory_fast[];     // 110 bytes, 60 frames, FR=0x44
 extern const unsigned char lut_factory_quality[];  // 110 bytes, 50 frames, FR=0x22
