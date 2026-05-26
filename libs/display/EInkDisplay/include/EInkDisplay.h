@@ -112,6 +112,7 @@ class EInkDisplay {
   uint32_t bufferSize = BUFFER_SIZE;
   bool _x3Mode = false;
   bool _murphyM3Mode = false;
+  uint8_t _murphyM3FastRefreshCount = 0;
   bool _x3RedRamSynced = false;
   struct X3GrayState {
     bool lastBaseWasPartial = false;
