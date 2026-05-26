@@ -968,6 +968,16 @@ void EInkDisplay::setFramebuffer(const uint8_t* bwBuffer) const {
   memcpy(frameBuffer, bwBuffer, bufferSize);
 }
 
+// Murphy's framebuffer convention is bit=1 means white pixel (init fills 0xFF,
+// clearScreen defaults to 0xFF). The grayscale renderer feeds LSB/MSB planes
+// using the opposite convention (bit=1 means dark). Invert when ingesting a
+// grayscale plane as the source-of-truth framebuffer for Murphy.
+static void copyGrayPlaneInverted(uint8_t* dst, const uint8_t* src, uint32_t bytes) {
+  for (uint32_t i = 0; i < bytes; i++) {
+    dst[i] = static_cast<uint8_t>(~src[i]);
+  }
+}
+
 #ifndef EINK_DISPLAY_SINGLE_BUFFER_MODE
 void EInkDisplay::swapBuffers() {
   uint8_t* temp = frameBuffer;
@@ -979,7 +989,9 @@ void EInkDisplay::swapBuffers() {
 void EInkDisplay::grayscaleRevert() {
   if (_murphyM3Mode) {
     inGrayscaleMode = false;
-    displayBuffer(FULL_REFRESH);
+    // Fast LUT is destination-only, so it fully overwrites any prior grayscale
+    // content without needing the inversion-flash clear pass.
+    displayBuffer(FAST_REFRESH);
     return;
   }
 
@@ -1002,7 +1014,7 @@ void EInkDisplay::copyGrayscaleLsbBuffers(const uint8_t* lsbBuffer) {
   }
 
   if (_murphyM3Mode) {
-    setFramebuffer(lsbBuffer);
+    copyGrayPlaneInverted(frameBuffer, lsbBuffer, bufferSize);
     _x3GrayState.lsbValid = true;
     return;
   }
@@ -1036,7 +1048,7 @@ void EInkDisplay::copyGrayscaleMsbBuffers(const uint8_t* msbBuffer) {
   }
 
   if (_murphyM3Mode) {
-    setFramebuffer(msbBuffer);
+    copyGrayPlaneInverted(frameBuffer, msbBuffer, bufferSize);
     return;
   }
 
@@ -1067,7 +1079,10 @@ void EInkDisplay::copyGrayscaleMsbBuffers(const uint8_t* msbBuffer) {
 
 void EInkDisplay::copyGrayscaleBuffers(const uint8_t* lsbBuffer, const uint8_t* msbBuffer) {
   if (_murphyM3Mode) {
-    setFramebuffer(msbBuffer ? msbBuffer : lsbBuffer);
+    const uint8_t* src = msbBuffer ? msbBuffer : lsbBuffer;
+    if (src) {
+      copyGrayPlaneInverted(frameBuffer, src, bufferSize);
+    }
     return;
   }
 
@@ -1091,8 +1106,8 @@ void EInkDisplay::writeGrayscalePlaneStrip(GrayPlane plane, const uint8_t* rows,
 
   if (_murphyM3Mode) {
     for (uint16_t row = 0; row < numRows; row++) {
-      memcpy(frameBuffer + static_cast<uint32_t>(yStart + row) * displayWidthBytes,
-             rows + static_cast<uint32_t>(row) * displayWidthBytes, displayWidthBytes);
+      copyGrayPlaneInverted(frameBuffer + static_cast<uint32_t>(yStart + row) * displayWidthBytes,
+                            rows + static_cast<uint32_t>(row) * displayWidthBytes, displayWidthBytes);
     }
     return;
   }
@@ -1478,7 +1493,11 @@ void EInkDisplay::displayGrayBuffer(const bool turnOffScreen, const unsigned cha
   (void)lut;
   (void)factoryMode;
   if (_murphyM3Mode) {
-    displayBuffer(FULL_REFRESH, turnOffScreen);
+    // Murphy is a 1-bit panel — there's no true grayscale path. The grayscale
+    // buffer was already ingested via copyGrayscale* with inverted polarity to
+    // match Murphy's framebuffer convention. Route through the normal fast
+    // refresh so we get a flash-free update.
+    displayBuffer(FAST_REFRESH, turnOffScreen);
     return;
   }
 
