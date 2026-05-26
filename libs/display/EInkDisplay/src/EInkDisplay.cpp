@@ -1163,13 +1163,23 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
                     millis(), modeName, blackPixels, bufferSize * 8UL, MURPHY_LOAD_OEM_LUT_EACH_REFRESH);
     }
 #if MURPHY_LOAD_OEM_LUT_EACH_REFRESH
-    if (mode == FAST_REFRESH) {
-      loadMurphyM3FastLut();
-    } else {
-      loadMurphyM3DefaultLut();
-    }
+    // NOTE: the alt LUTs (loadMurphyM3FastLut) are OEM's partial-refresh
+    // waveform — they only drive a single short phase and require the
+    // 0x17/0xA5 partial-window trigger pair to actually flip pixels. Using
+    // them as a full-refresh waveform causes incomplete updates where the
+    // panel appears to flash but the new frame doesn't latch, and a second
+    // refresh shows what should have been the previous frame. Always load
+    // the default LUT until the partial-refresh trigger path is wired.
+    loadMurphyM3DefaultLut();
 #endif
-    writePlaneMurphyM3(CMD_UC8253_DTM1, murphyM3PreviousFrame);
+    // OEM (FUN_42038cac) sends the current frame to both DTM1 and DTM2. The
+    // default LUTs are destination-only: with (old=new) for every pixel only
+    // LUTWW/LUTBB fire, and those waveforms fully drive a pixel to its target
+    // value. The BW/WB LUTs are short partial-refresh kicks meant for the
+    // 0x17/0xA5 path; using them on changed pixels (as a prev/new diff would)
+    // leaves pixels half-flipped, so the panel flashes but doesn't latch and
+    // the next refresh "completes" the prior frame. Mirror the OEM here.
+    writePlaneMurphyM3(CMD_UC8253_DTM1, frameBuffer);
     writePlaneMurphyM3(CMD_UC8253_DTM2, frameBuffer);
     triggerRefreshMurphyM3(turnOffScreen);
     memcpy(murphyM3PreviousFrame, frameBuffer, MURPHY_M3_BUFFER_SIZE);
