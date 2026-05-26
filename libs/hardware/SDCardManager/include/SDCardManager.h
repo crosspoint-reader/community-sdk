@@ -3,7 +3,16 @@
 #include <WString.h>
 #include <vector>
 #include <string>
+#include <FS.h>
 #include <SdFat.h>
+
+#if defined(CROSSPOINT_BOARD_MURPHY_M3) || defined(BOARD_MURPHY_M3) || defined(BOARD_CROWPANEL_37_S3)
+#define SDCARDMANAGER_USE_SD_MMC 1
+using SDManagedFile = File;
+#else
+using SDManagedFile = FsFile;
+#endif
+#define SDCARDMANAGER_HAS_MANAGED_FILE 1
 
 class SDCardManager {
  public:
@@ -25,19 +34,19 @@ class SDCardManager {
   // Ensure a directory exists, creating it if necessary. Returns true on success.
   bool ensureDirectoryExists(const char* path);
 
-  FsFile open(const char* path, const oflag_t oflag = O_RDONLY) { return sd.open(path, oflag); }
-  bool mkdir(const char* path, const bool pFlag = true) { return sd.mkdir(path, pFlag); }
-  bool exists(const char* path) { return sd.exists(path); }
-  bool remove(const char* path) { return sd.remove(path); }
-  bool rmdir(const char* path) { return sd.rmdir(path); }
-  bool rename(const char* path, const char* newPath) { return sd.rename(path, newPath); }
+  SDManagedFile open(const char* path, const oflag_t oflag = O_RDONLY);
+  bool mkdir(const char* path, const bool pFlag = true);
+  bool exists(const char* path);
+  bool remove(const char* path);
+  bool rmdir(const char* path);
+  bool rename(const char* path, const char* newPath);
 
-  bool openFileForRead(const char* moduleName, const char* path, FsFile& file);
-  bool openFileForRead(const char* moduleName, const std::string& path, FsFile& file);
-  bool openFileForRead(const char* moduleName, const String& path, FsFile& file);
-  bool openFileForWrite(const char* moduleName, const char* path, FsFile& file);
-  bool openFileForWrite(const char* moduleName, const std::string& path, FsFile& file);
-  bool openFileForWrite(const char* moduleName, const String& path, FsFile& file);
+  bool openFileForRead(const char* moduleName, const char* path, SDManagedFile& file);
+  bool openFileForRead(const char* moduleName, const std::string& path, SDManagedFile& file);
+  bool openFileForRead(const char* moduleName, const String& path, SDManagedFile& file);
+  bool openFileForWrite(const char* moduleName, const char* path, SDManagedFile& file);
+  bool openFileForWrite(const char* moduleName, const std::string& path, SDManagedFile& file);
+  bool openFileForWrite(const char* moduleName, const String& path, SDManagedFile& file);
   bool removeDir(const char* path);
 
  static SDCardManager& getInstance() { return instance; }

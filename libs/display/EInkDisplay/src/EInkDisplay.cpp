@@ -1,5 +1,7 @@
 #include "EInkDisplay.h"
 
+#include <BoardConfig.h>
+
 #include <cstring>
 #include <fstream>
 #include <vector>
@@ -39,6 +41,106 @@
 
 // Power management
 #define CMD_DEEP_SLEEP 0x10  // Deep sleep
+
+#define CMD_UC8253_PANEL_SETTING       0x00
+#define CMD_UC8253_POWER_OFF           0x02
+#define CMD_UC8253_POWER_ON            0x04
+#define CMD_UC8253_DEEP_SLEEP          0x07
+#define CMD_UC8253_DTM1                0x10
+#define CMD_UC8253_DISPLAY_REFRESH     0x12
+#define CMD_UC8253_DTM2                0x13
+#define CMD_UC8253_VCOM_DATA_INTERVAL  0x50
+#define CMD_UC8253_POWER_SETTING       0x01
+#define CMD_UC8253_BOOSTER_SOFT_START  0x06
+#define CMD_UC8253_PLL_CONTROL         0x30
+#define CMD_UC8253_RESOLUTION_SETTING  0x61
+#define CMD_UC8253_VCOM_DC_SETTING     0x82
+
+#ifndef MURPHY_LOAD_OEM_LUT_EACH_REFRESH
+#define MURPHY_LOAD_OEM_LUT_EACH_REFRESH 1
+#endif
+
+static void logMurphyPinLevels(const char* label) {
+  if (!Serial) return;
+  Serial.printf("[%lu]   Murphy pins %s: MOSI3=%d SCK4=%d CS5=%d DC6=%d RST7=%d BUSY8=%d FL48=%d\n",
+                millis(), label, digitalRead(3), digitalRead(4), digitalRead(5), digitalRead(6),
+                digitalRead(7), digitalRead(8), digitalRead(48));
+}
+
+static uint32_t countMurphyBlackPixels(const uint8_t* data, uint32_t size) {
+  if (!data) return 0;
+  uint32_t blackPixels = 0;
+  for (uint32_t i = 0; i < size; i++) {
+    blackPixels += __builtin_popcount(static_cast<uint8_t>(~data[i]));
+  }
+  return blackPixels;
+}
+
+static constexpr uint8_t MURPHY_LUT_20_DEFAULT[] = {
+    0x01, 0x08, 0x08, 0x08, 0x08, 0x01, 0x01, 0x01, 0x02, 0x02, 0x02, 0x02, 0x01, 0x01,
+    0x01, 0x08, 0x08, 0x08, 0x08, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+
+static constexpr uint8_t MURPHY_LUT_21_DEFAULT[] = {
+    0x01, 0x48, 0x48, 0x48, 0x48, 0x01, 0x01, 0x01, 0x02, 0x02, 0x02, 0x02, 0x01, 0x01,
+    0x01, 0x88, 0x88, 0x88, 0x88, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+
+static constexpr uint8_t MURPHY_LUT_22_DEFAULT[] = {
+    0x01, 0x48, 0x48, 0x48, 0x48, 0x01, 0x01, 0x01, 0x02, 0x02, 0x02, 0x02, 0x01, 0x01,
+    0x01, 0x88, 0x88, 0x88, 0x88, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+
+static constexpr uint8_t MURPHY_LUT_23_DEFAULT[] = {
+    0x01, 0x88, 0x88, 0x88, 0x88, 0x01, 0x01, 0x01, 0x02, 0x02, 0x02, 0x02, 0x01, 0x01,
+    0x01, 0x48, 0x48, 0x48, 0x48, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+
+static constexpr uint8_t MURPHY_LUT_24_DEFAULT[] = {
+    0x01, 0x88, 0x88, 0x88, 0x88, 0x01, 0x01, 0x01, 0x02, 0x02, 0x02, 0x02, 0x01, 0x01,
+    0x01, 0x48, 0x48, 0x48, 0x48, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+
+// Alternate (fast/short) OEM LUT set. Reverse-engineered from Murphy_M3 firmware
+// at flash addresses 0x3c236fb6..0x3c23706c. Shorter on-times than the default
+// set (frame counts collapsed into the first four phases). Loaded by the OEM
+// when the alternate init branch (power_setting MURPHY_OEM_POWER_SETTING_ALT)
+// is used. LUT_20_ALT and LUT_23_ALT_B are 56 bytes; the rest are 42 bytes.
+static constexpr uint8_t MURPHY_LUT_20_ALT[] = {
+    0x01, 0x0F, 0x0F, 0x0F, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+
+static constexpr uint8_t MURPHY_LUT_21_ALT[] = {
+    0x01, 0x4F, 0x8F, 0x0F, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+
+static constexpr uint8_t MURPHY_LUT_22_ALT[] = {
+    0x01, 0x4F, 0x8F, 0x4F, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+
+static constexpr uint8_t MURPHY_LUT_23_ALT[] = {
+    0x01, 0x0F, 0x8F, 0x0F, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+
+static constexpr uint8_t MURPHY_LUT_24_ALT[] = {
+    0x01, 0x0F, 0x8F, 0x4F, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+
+// Alternate OEM power_setting payload (0x3c236ca3). The simple branch — used by
+// initMurphyM3Controller() today — uses {0x03,0x10,0x3F,0x3B,0x0D}.
+static constexpr uint8_t MURPHY_OEM_POWER_SETTING_ALT[] = {0x03, 0x10, 0x3F, 0x3F, 0x03};
+
+// Partial-refresh trigger pair seen in the alt branch after data write. Kept as
+// constants for future bring-up; not used by the current refresh path.
+static constexpr uint8_t MURPHY_CMD_PARTIAL_WINDOW = 0x17;
+static constexpr uint8_t MURPHY_CMD_PARTIAL_TRIGGER_ARG = 0xA5;
 
 // Custom LUT for fast refresh
 const unsigned char lut_grayscale[] PROGMEM = {
@@ -212,11 +314,30 @@ void EInkDisplay::setDisplayDimensions(uint16_t width, uint16_t height) {
   displayWidthBytes = width / 8;
   bufferSize = displayWidthBytes * height;
   _x3Mode = false;
+  _murphyM3Mode = false;
 }
 
 void EInkDisplay::setDisplayX3() {
   setDisplayDimensions(X3_DISPLAY_WIDTH, X3_DISPLAY_HEIGHT);
   _x3Mode = true;
+}
+
+void EInkDisplay::setDisplayMurphyM3() {
+  // CrossPoint's renderer treats the display dimensions as the controller's
+  // command orientation. The Murphy controller is 240x416, but the device is
+  // held as 240x416 portrait glass with controller RAM rotated relative to the
+  // UI. Expose a 416x240 framebuffer here so the existing renderer portrait
+  // transform presents a 240x416 logical screen, then rotate only when writing
+  // the Murphy plane to the UC8253.
+  setDisplayDimensions(MURPHY_M3_FRAMEBUFFER_WIDTH, MURPHY_M3_FRAMEBUFFER_HEIGHT);
+  _murphyM3Mode = true;
+  memset(murphyM3PreviousFrame, 0xFF, sizeof(murphyM3PreviousFrame));
+}
+
+void EInkDisplay::skipInitialResync() {
+  if (!_x3Mode) return;
+  _x3InitialFullSyncsRemaining = 0;
+  _x3RedRamSynced = true;
 }
 
 void EInkDisplay::requestResync(uint8_t settlePasses) {
@@ -264,13 +385,33 @@ void EInkDisplay::begin() {
 
   if (Serial) Serial.printf("[%lu]   Initializing e-ink display driver...\n", millis());
 
-  // Initialize SPI with custom pins
-  SPI.begin(_sclk, -1, _mosi, _cs);
-  const uint32_t spiHz = _x3Mode ? 10000000 : 40000000;
+  if (BoardConfig::ACTIVE.display.powerEnable >= 0) {
+    pinMode(BoardConfig::ACTIVE.display.powerEnable, OUTPUT);
+    digitalWrite(BoardConfig::ACTIVE.display.powerEnable, HIGH);
+    delay(20);
+  }
+
+  // Initialize SPI with custom pins. Murphy uses the vendor bit-banged write path
+  // during bring-up, so do not attach the Arduino SPI peripheral to EPD pins.
+  if (!_murphyM3Mode) {
+    SPI.begin(_sclk, -1, _mosi, _cs);
+  }
+  const uint32_t spiHz = _murphyM3Mode ? 4000000 : (_x3Mode ? 10000000 : 40000000);
   spiSettings = SPISettings(spiHz, MSBFIRST, SPI_MODE0);
-  if (Serial) Serial.printf("[%lu]   SPI initialized at %lu Hz, Mode 0\n", millis(), spiHz);
+  if (Serial) {
+    Serial.printf("[%lu]   %s at %lu Hz, Mode 0\n", millis(),
+                  _murphyM3Mode ? "Bit-banged display bus configured" : "SPI initialized", spiHz);
+  }
 
   // Setup GPIO pins
+  if (_murphyM3Mode) {
+    pinMode(_sclk, OUTPUT);
+    pinMode(_mosi, OUTPUT);
+    digitalWrite(_sclk, HIGH);
+    digitalWrite(_mosi, LOW);
+    pinMode(48, INPUT);
+    logMurphyPinLevels("after power enables");
+  }
   pinMode(_cs, OUTPUT);
   pinMode(_dc, OUTPUT);
   pinMode(_rst, OUTPUT);
@@ -296,6 +437,20 @@ void EInkDisplay::begin() {
 
 void EInkDisplay::resetDisplay() {
   if (Serial) Serial.printf("[%lu]   Resetting display...\n", millis());
+  if (_murphyM3Mode) {
+    digitalWrite(_rst, HIGH);
+    delay(20);
+    logMurphyPinLevels("before reset");
+    digitalWrite(_rst, LOW);
+    delay(20);
+    logMurphyPinLevels("reset low");
+    digitalWrite(_rst, HIGH);
+    delay(200);
+    logMurphyPinLevels("reset high");
+    if (Serial) Serial.printf("[%lu]   Display reset complete, BUSY=%d\n", millis(), digitalRead(_busy));
+    return;
+  }
+
   digitalWrite(_rst, HIGH);
   delay(20);
   digitalWrite(_rst, LOW);
@@ -303,7 +458,7 @@ void EInkDisplay::resetDisplay() {
   digitalWrite(_rst, HIGH);
   delay(20);
   if (Serial) Serial.printf("[%lu]   Display reset complete\n", millis());
-  if (_x3Mode) {
+  if (_x3Mode || _murphyM3Mode) {
     delay(50);
     return;
   }
@@ -311,11 +466,23 @@ void EInkDisplay::resetDisplay() {
 
 void EInkDisplay::waitForRefresh(const char* comment) {
   unsigned long start = millis();
-  if (!_x3Mode) {
+  if (!_x3Mode && !_murphyM3Mode) {
     while (digitalRead(_busy) == HIGH) {
       delay(1);
       if (millis() - start > 30000) break;
     }
+  } else if (_murphyM3Mode) {
+    constexpr unsigned long murphyBusyTimeoutMs = 1500;
+    const int initialBusy = digitalRead(_busy);
+    while (digitalRead(_busy) == LOW) {
+      delay(1);
+      if (millis() - start > murphyBusyTimeoutMs) break;
+    }
+    if (comment && Serial) {
+      Serial.printf("[%lu]   Refresh done: %s (%lu ms, busy %d->%d%s)\n", millis(), comment, millis() - start,
+                    initialBusy, digitalRead(_busy), millis() - start > murphyBusyTimeoutMs ? ", timeout" : "");
+    }
+    return;
   } else {
     bool sawLow = false;
     while (digitalRead(_busy) == HIGH) {
@@ -335,6 +502,20 @@ void EInkDisplay::waitForRefresh(const char* comment) {
 }
 
 void EInkDisplay::sendCommand(uint8_t command) {
+  if (_murphyM3Mode) {
+    digitalWrite(_dc, LOW);
+    digitalWrite(_cs, LOW);
+    for (uint8_t bit = 0; bit < 8; bit++) {
+      digitalWrite(_sclk, LOW);
+      digitalWrite(_mosi, (command & 0x80) ? HIGH : LOW);
+      digitalWrite(_sclk, HIGH);
+      command <<= 1;
+    }
+    digitalWrite(_cs, HIGH);
+    digitalWrite(_dc, HIGH);
+    return;
+  }
+
   SPI.beginTransaction(spiSettings);
   digitalWrite(_dc, LOW);  // Command mode
   digitalWrite(_cs, LOW);  // Select chip
@@ -344,6 +525,20 @@ void EInkDisplay::sendCommand(uint8_t command) {
 }
 
 void EInkDisplay::sendData(uint8_t data) {
+  if (_murphyM3Mode) {
+    digitalWrite(_dc, HIGH);
+    digitalWrite(_cs, LOW);
+    for (uint8_t bit = 0; bit < 8; bit++) {
+      digitalWrite(_sclk, LOW);
+      digitalWrite(_mosi, (data & 0x80) ? HIGH : LOW);
+      digitalWrite(_sclk, HIGH);
+      data <<= 1;
+    }
+    digitalWrite(_cs, HIGH);
+    digitalWrite(_dc, HIGH);
+    return;
+  }
+
   SPI.beginTransaction(spiSettings);
   digitalWrite(_dc, HIGH);  // Data mode
   digitalWrite(_cs, LOW);   // Select chip
@@ -353,6 +548,24 @@ void EInkDisplay::sendData(uint8_t data) {
 }
 
 void EInkDisplay::sendData(const uint8_t* data, uint16_t length) {
+  if (_murphyM3Mode) {
+    if (!data || length == 0) return;
+    digitalWrite(_dc, HIGH);
+    digitalWrite(_cs, LOW);
+    for (uint16_t idx = 0; idx < length; idx++) {
+      uint8_t value = data[idx];
+      for (uint8_t bit = 0; bit < 8; bit++) {
+        digitalWrite(_sclk, LOW);
+        digitalWrite(_mosi, (value & 0x80) ? HIGH : LOW);
+        digitalWrite(_sclk, HIGH);
+        value <<= 1;
+      }
+    }
+    digitalWrite(_cs, HIGH);
+    digitalWrite(_dc, HIGH);
+    return;
+  }
+
   SPI.beginTransaction(spiSettings);
   digitalWrite(_dc, HIGH);       // Data mode
   digitalWrite(_cs, LOW);        // Select chip
@@ -363,11 +576,23 @@ void EInkDisplay::sendData(const uint8_t* data, uint16_t length) {
 
 void EInkDisplay::waitWhileBusy(const char* comment) {
   unsigned long start = millis();
-  if (!_x3Mode) {
+  if (!_x3Mode && !_murphyM3Mode) {
     while (digitalRead(_busy) == HIGH) {
       delay(1);
       if (millis() - start > 30000) break;
     }
+  } else if (_murphyM3Mode) {
+    constexpr unsigned long murphyBusyTimeoutMs = 1500;
+    const int initialBusy = digitalRead(_busy);
+    while (digitalRead(_busy) == LOW) {
+      delay(1);
+      if (millis() - start > murphyBusyTimeoutMs) break;
+    }
+    if (comment && Serial) {
+      Serial.printf("[%lu]   Wait complete: %s (%lu ms, busy %d->%d%s)\n", millis(), comment, millis() - start,
+                    initialBusy, digitalRead(_busy), millis() - start > murphyBusyTimeoutMs ? ", timeout" : "");
+    }
+    return;
   } else {
     bool sawLow = false;
     while (digitalRead(_busy) == HIGH) {
@@ -388,7 +613,133 @@ void EInkDisplay::waitWhileBusy(const char* comment) {
   }
 }
 
+void EInkDisplay::writePlaneMurphyM3(uint8_t command, const uint8_t* data) {
+  sendCommand(command);
+  if (!data) return;
+
+  uint8_t row[MURPHY_M3_CONTROLLER_WIDTH_BYTES];
+  for (uint16_t controllerY = 0; controllerY < MURPHY_M3_CONTROLLER_HEIGHT; controllerY++) {
+    memset(row, 0, sizeof(row));
+    for (uint16_t controllerX = 0; controllerX < MURPHY_M3_CONTROLLER_WIDTH; controllerX++) {
+      const uint16_t srcX = controllerY;
+      const uint16_t srcY = static_cast<uint16_t>(MURPHY_M3_FRAMEBUFFER_HEIGHT - 1 - controllerX);
+      const uint32_t srcByte = static_cast<uint32_t>(srcY) * displayWidthBytes + (srcX >> 3);
+      const uint8_t srcMask = static_cast<uint8_t>(0x80 >> (srcX & 0x07));
+      if (data[srcByte] & srcMask) {
+        row[controllerX >> 3] |= static_cast<uint8_t>(0x80 >> (controllerX & 0x07));
+      }
+    }
+    sendData(row, sizeof(row));
+  }
+}
+
+void EInkDisplay::fillPlaneMurphyM3(uint8_t command, uint8_t fillByte) {
+  uint8_t rowBuf[MURPHY_M3_CONTROLLER_WIDTH_BYTES];
+  memset(rowBuf, fillByte, sizeof(rowBuf));
+  sendCommand(command);
+  if (_murphyM3Mode) {
+    for (uint16_t y = 0; y < MURPHY_M3_CONTROLLER_HEIGHT; y++) {
+      sendData(rowBuf, sizeof(rowBuf));
+    }
+    return;
+  }
+
+  SPI.beginTransaction(spiSettings);
+  digitalWrite(_dc, HIGH);
+  digitalWrite(_cs, LOW);
+  for (uint16_t y = 0; y < displayHeight; y++) {
+    SPI.writeBytes(rowBuf, displayWidthBytes);
+  }
+  digitalWrite(_cs, HIGH);
+  SPI.endTransaction();
+}
+
+void EInkDisplay::triggerRefreshMurphyM3(bool turnOffScreen) {
+  if (!isScreenOn) {
+    sendCommand(CMD_UC8253_POWER_ON);
+    waitForRefresh(" UC8253_PON");
+    isScreenOn = true;
+  }
+
+  sendCommand(CMD_UC8253_DISPLAY_REFRESH);
+  waitForRefresh(" UC8253_DRF");
+
+  if (turnOffScreen) {
+    sendCommand(CMD_UC8253_POWER_OFF);
+    waitForRefresh(" UC8253_POF");
+    isScreenOn = false;
+  }
+}
+
+void EInkDisplay::loadMurphyM3DefaultLut() {
+  sendCommand(0x20);
+  sendData(MURPHY_LUT_20_DEFAULT, sizeof(MURPHY_LUT_20_DEFAULT));
+  sendCommand(0x21);
+  sendData(MURPHY_LUT_21_DEFAULT, sizeof(MURPHY_LUT_21_DEFAULT));
+  sendCommand(0x22);
+  sendData(MURPHY_LUT_22_DEFAULT, sizeof(MURPHY_LUT_22_DEFAULT));
+  sendCommand(0x23);
+  sendData(MURPHY_LUT_23_DEFAULT, sizeof(MURPHY_LUT_23_DEFAULT));
+  sendCommand(0x24);
+  sendData(MURPHY_LUT_24_DEFAULT, sizeof(MURPHY_LUT_24_DEFAULT));
+}
+
+void EInkDisplay::loadMurphyM3FastLut() {
+  sendCommand(0x20);
+  sendData(MURPHY_LUT_20_ALT, sizeof(MURPHY_LUT_20_ALT));
+  sendCommand(0x21);
+  sendData(MURPHY_LUT_21_ALT, sizeof(MURPHY_LUT_21_ALT));
+  sendCommand(0x22);
+  sendData(MURPHY_LUT_22_ALT, sizeof(MURPHY_LUT_22_ALT));
+  sendCommand(0x23);
+  sendData(MURPHY_LUT_23_ALT, sizeof(MURPHY_LUT_23_ALT));
+  sendCommand(0x24);
+  sendData(MURPHY_LUT_24_ALT, sizeof(MURPHY_LUT_24_ALT));
+}
+
+void EInkDisplay::initMurphyM3Controller() {
+  if (Serial) Serial.printf("[%lu]   Initializing Murphy UC8253 controller with OEM sequence...\n", millis());
+
+  const uint8_t powerSetting[] = {0x03, 0x10, 0x3F, 0x3B, 0x0D};
+  sendCommand(CMD_UC8253_POWER_SETTING);
+  sendData(powerSetting, sizeof(powerSetting));
+
+  const uint8_t booster[] = {0xD7, 0xD7, 0x1F};
+  sendCommand(CMD_UC8253_BOOSTER_SOFT_START);
+  sendData(booster, sizeof(booster));
+
+  sendCommand(CMD_UC8253_POWER_ON);
+  waitWhileBusy(" UC8253_INIT_PON");
+  isScreenOn = true;
+
+  sendCommand(CMD_UC8253_PANEL_SETTING);
+  sendData(0xFF);
+
+  sendCommand(CMD_UC8253_PLL_CONTROL);
+  sendData(0x09);
+
+  const uint8_t resolution[] = {0xF0, 0x01, 0xA0};
+  sendCommand(CMD_UC8253_RESOLUTION_SETTING);
+  sendData(resolution, sizeof(resolution));
+
+  sendCommand(CMD_UC8253_VCOM_DC_SETTING);
+  sendData(0x0F);
+
+  sendCommand(CMD_UC8253_VCOM_DATA_INTERVAL);
+  sendData(0x97);
+
+  waitWhileBusy(" UC8253_INIT");
+
+  fillPlaneMurphyM3(CMD_UC8253_DTM1, 0xFF);
+  fillPlaneMurphyM3(CMD_UC8253_DTM2, 0xFF);
+}
+
 void EInkDisplay::initDisplayController() {
+  if (_murphyM3Mode) {
+    initMurphyM3Controller();
+    return;
+  }
+
 #ifndef X3_USE_X4_INIT
   if (_x3Mode) {
     sendCommand(0x00);
@@ -613,6 +964,12 @@ void EInkDisplay::swapBuffers() {
 #endif
 
 void EInkDisplay::grayscaleRevert() {
+  if (_murphyM3Mode) {
+    inGrayscaleMode = false;
+    displayBuffer(FULL_REFRESH);
+    return;
+  }
+
   if (!inGrayscaleMode) {
     return;
   }
@@ -628,6 +985,12 @@ void EInkDisplay::grayscaleRevert() {
 void EInkDisplay::copyGrayscaleLsbBuffers(const uint8_t* lsbBuffer) {
   if (!lsbBuffer) {
     _x3GrayState.lsbValid = false;
+    return;
+  }
+
+  if (_murphyM3Mode) {
+    setFramebuffer(lsbBuffer);
+    _x3GrayState.lsbValid = true;
     return;
   }
 
@@ -659,6 +1022,11 @@ void EInkDisplay::copyGrayscaleMsbBuffers(const uint8_t* msbBuffer) {
     return;
   }
 
+  if (_murphyM3Mode) {
+    setFramebuffer(msbBuffer);
+    return;
+  }
+
   if (_x3Mode) {
     if (!_x3GrayState.lsbValid) {
       return;
@@ -685,6 +1053,11 @@ void EInkDisplay::copyGrayscaleMsbBuffers(const uint8_t* msbBuffer) {
 }
 
 void EInkDisplay::copyGrayscaleBuffers(const uint8_t* lsbBuffer, const uint8_t* msbBuffer) {
+  if (_murphyM3Mode) {
+    setFramebuffer(msbBuffer ? msbBuffer : lsbBuffer);
+    return;
+  }
+
   if (_x3Mode) {
     copyGrayscaleLsbBuffers(lsbBuffer);
     copyGrayscaleMsbBuffers(msbBuffer);
@@ -693,6 +1066,38 @@ void EInkDisplay::copyGrayscaleBuffers(const uint8_t* lsbBuffer, const uint8_t* 
   setRamArea(0, 0, displayWidth, displayHeight);
   writeRamBuffer(CMD_WRITE_RAM_BW, lsbBuffer, bufferSize);
   writeRamBuffer(CMD_WRITE_RAM_RED, msbBuffer, bufferSize);
+}
+
+void EInkDisplay::writeGrayscalePlaneStrip(GrayPlane plane, const uint8_t* rows, uint16_t yStart, uint16_t numRows) {
+  if (!rows || yStart >= displayHeight || numRows == 0) {
+    return;
+  }
+  if (yStart + numRows > displayHeight) {
+    numRows = displayHeight - yStart;
+  }
+
+  if (_murphyM3Mode) {
+    for (uint16_t row = 0; row < numRows; row++) {
+      memcpy(frameBuffer + static_cast<uint32_t>(yStart + row) * displayWidthBytes,
+             rows + static_cast<uint32_t>(row) * displayWidthBytes, displayWidthBytes);
+    }
+    return;
+  }
+
+  if (_x3Mode) {
+    const uint8_t cmd = (plane == GRAY_PLANE_LSB) ? 0x10 : 0x13;
+    sendCommand(cmd);
+    for (uint16_t row = 0; row < numRows; row++) {
+      const uint16_t srcY = static_cast<uint16_t>(numRows - 1 - row);
+      sendData(rows + static_cast<uint32_t>(srcY) * displayWidthBytes, displayWidthBytes);
+    }
+    _x3GrayState.lsbValid = _x3GrayState.lsbValid || plane == GRAY_PLANE_LSB;
+    return;
+  }
+
+  const uint8_t command = (plane == GRAY_PLANE_LSB) ? CMD_WRITE_RAM_BW : CMD_WRITE_RAM_RED;
+  setRamArea(0, yStart, displayWidth, numRows);
+  writeRamBuffer(command, rows, static_cast<uint32_t>(displayWidthBytes) * numRows);
 }
 
 #ifdef EINK_DISPLAY_SINGLE_BUFFER_MODE
@@ -738,7 +1143,7 @@ void EInkDisplay::cleanupGrayscaleBuffers(const uint8_t* bwBuffer) {
 #endif
 
 void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
-  if (!_x3Mode && !isScreenOn && !turnOffScreen)
+  if (!_x3Mode && !_murphyM3Mode && !isScreenOn && !turnOffScreen)
   {
     // Force half refresh if screen is off (non-X3 only)
     mode = HALF_REFRESH;
@@ -748,6 +1153,27 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
   if (inGrayscaleMode) {
     inGrayscaleMode = false;
     grayscaleRevert();
+  }
+
+  if (_murphyM3Mode) {
+    if (Serial) {
+      const uint32_t blackPixels = countMurphyBlackPixels(frameBuffer, bufferSize);
+      const char* modeName = (mode == FULL_REFRESH) ? "full" : (mode == HALF_REFRESH) ? "half" : "fast";
+      Serial.printf("[%lu]   UC8253_MURPHY_REFRESH requested=%s black_pixels=%lu/%lu single_pass=1 lut_each=%d\n",
+                    millis(), modeName, blackPixels, bufferSize * 8UL, MURPHY_LOAD_OEM_LUT_EACH_REFRESH);
+    }
+#if MURPHY_LOAD_OEM_LUT_EACH_REFRESH
+    if (mode == FAST_REFRESH) {
+      loadMurphyM3FastLut();
+    } else {
+      loadMurphyM3DefaultLut();
+    }
+#endif
+    writePlaneMurphyM3(CMD_UC8253_DTM1, murphyM3PreviousFrame);
+    writePlaneMurphyM3(CMD_UC8253_DTM2, frameBuffer);
+    triggerRefreshMurphyM3(turnOffScreen);
+    memcpy(murphyM3PreviousFrame, frameBuffer, MURPHY_M3_BUFFER_SIZE);
+    return;
   }
 
   if (_x3Mode) {
@@ -956,6 +1382,11 @@ void EInkDisplay::displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h, 
     return;
   }
 
+  if (_murphyM3Mode) {
+    displayBuffer(FAST_REFRESH, turnOffScreen);
+    return;
+  }
+
   // displayWindow is not supported while the rest of the screen has grayscale content, revert it
   if (inGrayscaleMode) {
     inGrayscaleMode = false;
@@ -1009,7 +1440,14 @@ void EInkDisplay::displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h, 
   if (Serial) Serial.printf("[%lu]   Window display complete\n", millis());
 }
 
-void EInkDisplay::displayGrayBuffer(const bool turnOffScreen) {
+void EInkDisplay::displayGrayBuffer(const bool turnOffScreen, const unsigned char* lut, const bool factoryMode) {
+  (void)lut;
+  (void)factoryMode;
+  if (_murphyM3Mode) {
+    displayBuffer(FULL_REFRESH, turnOffScreen);
+    return;
+  }
+
   if (_x3Mode) {
     // X3 AA pipeline: LSB->0x10 + MSB->0x13, trigger 0x12 with X3 LUT bank.
     drawGrayscale = false;
@@ -1097,6 +1535,11 @@ void EInkDisplay::displayGrayBuffer(const bool turnOffScreen) {
 }
 
 void EInkDisplay::refreshDisplay(const RefreshMode mode, const bool turnOffScreen) {
+  if (_murphyM3Mode) {
+    triggerRefreshMurphyM3(turnOffScreen);
+    return;
+  }
+
   if (_x3Mode) {
     displayBuffer(mode, turnOffScreen);
     return;
@@ -1158,6 +1601,11 @@ void EInkDisplay::refreshDisplay(const RefreshMode mode, const bool turnOffScree
 }
 
 void EInkDisplay::setCustomLUT(const bool enabled, const unsigned char* lutData) {
+  if (_murphyM3Mode) {
+    customLutActive = false;
+    return;
+  }
+
   if (enabled) {
     if (Serial) Serial.printf("[%lu]   Loading custom LUT...\n", millis());
 
@@ -1189,6 +1637,18 @@ void EInkDisplay::setCustomLUT(const bool enabled, const unsigned char* lutData)
 
 void EInkDisplay::deepSleep() {
   if (Serial) Serial.printf("[%lu]   Preparing display for deep sleep...\n", millis());
+
+  if (_murphyM3Mode) {
+    sendCommand(CMD_UC8253_POWER_OFF);
+    waitWhileBusy(" UC8253_POF");
+    sendCommand(CMD_UC8253_DEEP_SLEEP);
+    sendData(0xA5);
+    isScreenOn = false;
+    if (BoardConfig::ACTIVE.display.powerEnable >= 0) {
+      digitalWrite(BoardConfig::ACTIVE.display.powerEnable, LOW);
+    }
+    return;
+  }
 
   // First, power down the display properly
   // This shuts down the analog power rails and clock

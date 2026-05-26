@@ -19,6 +19,7 @@ class EInkDisplay {
 
   // Set X3 panel geometry and mode (must be called before begin())
   void setDisplayX3();
+  void setDisplayMurphyM3();
 
   // Initialize the display hardware and driver
   void begin();
@@ -32,6 +33,15 @@ class EInkDisplay {
   static constexpr uint16_t X3_DISPLAY_HEIGHT = 528;
   static constexpr uint16_t X3_DISPLAY_WIDTH_BYTES = X3_DISPLAY_WIDTH / 8;
   static constexpr uint32_t X3_BUFFER_SIZE = X3_DISPLAY_WIDTH_BYTES * X3_DISPLAY_HEIGHT;
+  static constexpr uint16_t MURPHY_M3_DISPLAY_WIDTH = 240;
+  static constexpr uint16_t MURPHY_M3_DISPLAY_HEIGHT = 416;
+  static constexpr uint16_t MURPHY_M3_CONTROLLER_WIDTH = 240;
+  static constexpr uint16_t MURPHY_M3_CONTROLLER_HEIGHT = 416;
+  static constexpr uint16_t MURPHY_M3_FRAMEBUFFER_WIDTH = 416;
+  static constexpr uint16_t MURPHY_M3_FRAMEBUFFER_HEIGHT = 240;
+  static constexpr uint16_t MURPHY_M3_DISPLAY_WIDTH_BYTES = MURPHY_M3_FRAMEBUFFER_WIDTH / 8;
+  static constexpr uint16_t MURPHY_M3_CONTROLLER_WIDTH_BYTES = MURPHY_M3_CONTROLLER_WIDTH / 8;
+  static constexpr uint32_t MURPHY_M3_BUFFER_SIZE = MURPHY_M3_DISPLAY_WIDTH_BYTES * MURPHY_M3_FRAMEBUFFER_HEIGHT;
   static constexpr uint32_t MAX_BUFFER_SIZE = 52272;  // max(800x480, 792x528) / 8
 
   // Runtime dimensions
@@ -52,6 +62,10 @@ class EInkDisplay {
   void copyGrayscaleBuffers(const uint8_t* lsbBuffer, const uint8_t* msbBuffer);
   void copyGrayscaleLsbBuffers(const uint8_t* lsbBuffer);
   void copyGrayscaleMsbBuffers(const uint8_t* msbBuffer);
+
+  enum GrayPlane { GRAY_PLANE_LSB, GRAY_PLANE_MSB };
+  void writeGrayscalePlaneStrip(GrayPlane plane, const uint8_t* rows, uint16_t yStart, uint16_t numRows);
+  bool supportsStripGrayscale() const { return true; }
 #ifdef EINK_DISPLAY_SINGLE_BUFFER_MODE
   void cleanupGrayscaleBuffers(const uint8_t* bwBuffer);
 #endif
@@ -59,12 +73,13 @@ class EInkDisplay {
   void displayBuffer(RefreshMode mode = FAST_REFRESH, bool turnOffScreen = false);
   // EXPERIMENTAL: Windowed update - display only a rectangular region
   void displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h, bool turnOffScreen = false);
-  void displayGrayBuffer(bool turnOffScreen = false);
+  void displayGrayBuffer(bool turnOffScreen = false, const unsigned char* lut = nullptr, bool factoryMode = false);
 
   void refreshDisplay(RefreshMode mode = FAST_REFRESH, bool turnOffScreen = false);
 
   // Hint the X3 policy to run a one-shot full resync on next update.
   void requestResync(uint8_t settlePasses = 0);
+  void skipInitialResync();
 
   // debug function
   void grayscaleRevert();
@@ -96,6 +111,7 @@ class EInkDisplay {
   uint16_t displayWidthBytes = DISPLAY_WIDTH_BYTES;
   uint32_t bufferSize = BUFFER_SIZE;
   bool _x3Mode = false;
+  bool _murphyM3Mode = false;
   bool _x3RedRamSynced = false;
   struct X3GrayState {
     bool lastBaseWasPartial = false;
@@ -108,6 +124,7 @@ class EInkDisplay {
   // Frame buffer (statically allocated)
   uint8_t frameBuffer0[MAX_BUFFER_SIZE];
   uint8_t* frameBuffer;
+  uint8_t murphyM3PreviousFrame[MURPHY_M3_BUFFER_SIZE];
 #ifndef EINK_DISPLAY_SINGLE_BUFFER_MODE
   uint8_t frameBuffer1[MAX_BUFFER_SIZE];
   uint8_t* frameBufferActive;
@@ -117,10 +134,10 @@ class EInkDisplay {
   SPISettings spiSettings;
 
   // State
-  bool isScreenOn;
-  bool customLutActive;
-  bool inGrayscaleMode;
-  bool drawGrayscale;
+  bool isScreenOn = false;
+  bool customLutActive = false;
+  bool inGrayscaleMode = false;
+  bool drawGrayscale = false;
 
   // Low-level display control
   void resetDisplay();
@@ -129,9 +146,35 @@ class EInkDisplay {
   void sendData(const uint8_t* data, uint16_t length);
   void waitForRefresh(const char* comment = nullptr);
   void waitWhileBusy(const char* comment = nullptr);
+  void pollBusy(const char* comment, const char* completeWord);
   void initDisplayController();
 
   // Low-level display operations
   void setRamArea(uint16_t x, uint16_t y, uint16_t w, uint16_t h);
   void writeRamBuffer(uint8_t ramBuffer, const uint8_t* data, uint32_t size);
+  void sendCommandDataX3(uint8_t cmd, const uint8_t* data, uint16_t len);
+  void sendCommandDataByteX3(uint8_t cmd, uint8_t d0);
+  void sendCommandDataByteX3(uint8_t cmd, uint8_t d0, uint8_t d1);
+  void sendPlaneX3(uint8_t ramCmd, uint8_t* buf, bool invert);
+  void fillPlaneX3(uint8_t ramCmd, uint8_t fillByte);
+  void loadLutBankX3(const uint8_t* vcom, const uint8_t* ww,
+                     const uint8_t* bw, const uint8_t* wb,
+                     const uint8_t* bb);
+  void loadLutBankX3WithCdi(uint8_t cdi0, const uint8_t* vcom,
+                            const uint8_t* ww, const uint8_t* bw,
+                            const uint8_t* wb, const uint8_t* bb);
+  void loadLutBankX3WithCdi(uint8_t cdi0, uint8_t cdi1,
+                            const uint8_t* vcom, const uint8_t* ww,
+                            const uint8_t* bw, const uint8_t* wb,
+                            const uint8_t* bb);
+  void triggerRefreshX3(bool turnOffScreen, const char* tag);
+  void initMurphyM3Controller();
+  void triggerRefreshMurphyM3(bool turnOffScreen);
+  void loadMurphyM3DefaultLut();
+  void loadMurphyM3FastLut();
+  void writePlaneMurphyM3(uint8_t command, const uint8_t* data);
+  void fillPlaneMurphyM3(uint8_t command, uint8_t fillByte);
 };
+
+extern const unsigned char lut_factory_fast[];
+extern const unsigned char lut_factory_quality[];

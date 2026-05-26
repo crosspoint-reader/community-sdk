@@ -1,0 +1,9 @@
+{
+  "name": "BoardConfig",
+  "version": "0.1.0",
+  "description": "Compile-time board profiles for OpenX4 community SDK targets.",
+  "keywords": ["board", "gpio", "e-paper"],
+  "frameworks": "arduino",
+  "platforms": "espressif32",
+  "headers": ["BoardConfig.h"]
+}
