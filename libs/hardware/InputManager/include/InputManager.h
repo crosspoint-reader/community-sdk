@@ -20,6 +20,7 @@ class InputManager {
    * Updates the button states. Should be called regularly in the main loop.
    */
   void update();
+  void clearState();
 
   /**
    * Returns true if the button was being held at the time of the last #update() call.
@@ -105,9 +106,11 @@ class InputManager {
   int getButtonFromADC(int adcValue, const int ranges[], int numButtons);
   bool isDigitalPressed(int8_t pin) const;
   uint8_t getTouchIrqState();
+  bool touchIrqActive(int irqRaw) const;
   void updateTouchFromIrq(unsigned long now, int irqRaw);
   bool readTouchPoint(TouchPoint& point);
-  bool decodeMurphyTouchFrame(const uint8_t* data, size_t len, TouchPoint& point) const;
+  bool decodeTouchFrame(const uint8_t* data, size_t len, TouchPoint& point) const;
+  bool decodeMurphyChsc6xFrame(const uint8_t* data, size_t len, TouchPoint& point) const;
   uint16_t mapTouchAxis(uint16_t raw, uint16_t rawMin, uint16_t rawMax, uint16_t outMax) const;
 
   uint8_t currentState;
@@ -146,10 +149,6 @@ class InputManager {
   static constexpr unsigned long TOUCH_SAMPLE_DELAY_MS = 8;
   static constexpr uint8_t TOUCH_READ_COMMAND = 0x00;
   static constexpr uint8_t TOUCH_FRAME_SIZE = 16;
-  static constexpr uint16_t MURPHY_TOUCH_X_MIN = 24;
-  static constexpr uint16_t MURPHY_TOUCH_X_MAX = 224;
-  static constexpr uint16_t MURPHY_TOUCH_Y_MIN = 24;
-  static constexpr uint16_t MURPHY_TOUCH_Y_MAX = 392;
 
   static const char* BUTTON_NAMES[];
 };

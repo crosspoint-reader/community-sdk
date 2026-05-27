@@ -7,6 +7,7 @@ namespace BoardConfig {
 enum class Board : uint8_t { XteinkX4, MurphyM3 };
 enum class DisplayController : uint8_t { SSD1677, UC8253 };
 enum class InputStyle : uint8_t { XteinkAdcLadder, DigitalFiveKey };
+enum class TouchController : uint8_t { None, MurphyChsc6x, Gt911 };
 
 struct DisplayPins {
   int8_t sclk;
@@ -44,12 +45,19 @@ struct FrontlightConfig {
   bool activeHigh;
 };
 
-struct TouchPins {
+struct TouchConfig {
   int8_t irq;
   int8_t reset;
   int8_t sda;
   int8_t scl;
   uint8_t i2cAddress;
+  TouchController controller;
+  uint16_t rawXMin;
+  uint16_t rawXMax;
+  uint16_t rawYMin;
+  uint16_t rawYMax;
+  bool irqActiveLow;
+  bool synthesizeConfirmButton;
 };
 
 struct BoardProfile {
@@ -63,7 +71,7 @@ struct BoardProfile {
   SdPins sd;
   InputPins input;
   FrontlightConfig frontlight;
-  TouchPins touch;
+  TouchConfig touch;
   int8_t batteryAdc;
   int8_t usbDetect;
   bool hasTouch;
@@ -83,7 +91,8 @@ constexpr BoardProfile XTEINK_X4 = {Board::XteinkX4,
                                     {PIN_UNASSIGNED, 7, PIN_UNASSIGNED, 12, PIN_UNASSIGNED, false},
                                     {0, 1, 2, 3, 4, 5, 3},
                                     {PIN_UNASSIGNED, 0, 0, true},
-                                    {PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, 0},
+                                    {PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, 0,
+                                     TouchController::None, 0, 0, 0, 0, true, false},
                                     0,
                                     20,
                                     false,
@@ -106,7 +115,9 @@ constexpr BoardProfile MURPHY_M3 = {Board::MurphyM3,
                                     {PIN_UNASSIGNED, 0, PIN_UNASSIGNED, PIN_UNASSIGNED, 1, 2, 0},
                                     {48, 25000, 10, true},
                                     // CHSC6x-style touch: IRQ=GPIO44 active-low, I2C SDA=13/SCL=12, addr=0x2e.
-                                    {44, 45, 13, 12, 0x2e},
+                                    // Raw axes are calibrated into display logical coordinates by InputManager.
+                                    {44, 45, 13, 12, 0x2e, TouchController::MurphyChsc6x, 24, 224, 24, 392, true,
+                                     false},
                                     PIN_UNASSIGNED,
                                     PIN_UNASSIGNED,
                                     true,

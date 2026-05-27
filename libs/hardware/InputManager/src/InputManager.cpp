@@ -61,7 +61,8 @@ void InputManager::begin() {
     analogSetAttenuation(ADC_11db);
   }
 
-  if (BoardConfig::ACTIVE.hasTouch && BoardConfig::ACTIVE.touch.irq >= 0) {
+  if (BoardConfig::ACTIVE.hasTouch && BoardConfig::ACTIVE.touch.controller != BoardConfig::TouchController::None &&
+      BoardConfig::ACTIVE.touch.irq >= 0) {
     pinMode(BoardConfig::ACTIVE.touch.irq, INPUT);
     touchIrqBaseline = digitalRead(BoardConfig::ACTIVE.touch.irq);
     touchIrqLast = touchIrqBaseline;
@@ -138,16 +139,21 @@ uint8_t InputManager::getTouchIrqState() {
   const unsigned long now = millis();
   const int raw = digitalRead(BoardConfig::ACTIVE.touch.irq);
   updateTouchFromIrq(now, raw);
+  const bool active = touchIrqActive(raw);
 
   if (raw != touchIrqLast && now - touchIrqLastChangeTime >= TOUCH_IRQ_DEBOUNCE_MS) {
     touchIrqLast = raw;
     touchIrqLastChangeTime = now;
-    if (raw != touchIrqBaseline) {
+    if (active) {
       touchIrqPulseUntil = now + TOUCH_IRQ_PULSE_MS;
     }
   }
 
-  return now < touchIrqPulseUntil ? (1 << BTN_CONFIRM) : 0;
+  return BoardConfig::ACTIVE.touch.synthesizeConfirmButton && now < touchIrqPulseUntil ? (1 << BTN_CONFIRM) : 0;
+}
+
+bool InputManager::touchIrqActive(const int irqRaw) const {
+  return BoardConfig::ACTIVE.touch.irqActiveLow ? irqRaw == LOW : irqRaw == HIGH;
 }
 
 void InputManager::updateTouchFromIrq(const unsigned long now, const int irqRaw) {
@@ -155,7 +161,7 @@ void InputManager::updateTouchFromIrq(const unsigned long now, const int irqRaw)
     return;
   }
 
-  if (irqRaw != touchIrqLast && now - touchIrqLastChangeTime >= TOUCH_IRQ_DEBOUNCE_MS && irqRaw != touchIrqBaseline) {
+  if (irqRaw != touchIrqLast && now - touchIrqLastChangeTime >= TOUCH_IRQ_DEBOUNCE_MS && touchIrqActive(irqRaw)) {
     touchReadPending = true;
     touchReadAt = now + TOUCH_SAMPLE_DELAY_MS;
   }
@@ -174,7 +180,7 @@ void InputManager::updateTouchFromIrq(const unsigned long now, const int irqRaw)
     }
   }
 
-  if (touchPressed && irqRaw != touchIrqBaseline) {
+  if (touchPressed && touchIrqActive(irqRaw)) {
     touchReleaseAt = now + TOUCH_IRQ_PULSE_MS;
   }
 
@@ -204,10 +210,21 @@ bool InputManager::readTouchPoint(TouchPoint& point) {
     data[i] = Wire.read();
   }
 
-  return decodeMurphyTouchFrame(data, TOUCH_FRAME_SIZE, point);
+  return decodeTouchFrame(data, TOUCH_FRAME_SIZE, point);
 }
 
-bool InputManager::decodeMurphyTouchFrame(const uint8_t* data, const size_t len, TouchPoint& point) const {
+bool InputManager::decodeTouchFrame(const uint8_t* data, const size_t len, TouchPoint& point) const {
+  switch (BoardConfig::ACTIVE.touch.controller) {
+    case BoardConfig::TouchController::MurphyChsc6x:
+      return decodeMurphyChsc6xFrame(data, len, point);
+    case BoardConfig::TouchController::Gt911:
+    case BoardConfig::TouchController::None:
+    default:
+      return false;
+  }
+}
+
+bool InputManager::decodeMurphyChsc6xFrame(const uint8_t* data, const size_t len, TouchPoint& point) const {
   if (len < 7 || (data[0] != 0x00 && data[0] != 0x36)) {
     return false;
   }
@@ -219,8 +236,12 @@ bool InputManager::decodeMurphyTouchFrame(const uint8_t* data, const size_t len,
   }
 
   point.valid = true;
-  point.x = mapTouchAxis(rawX, MURPHY_TOUCH_X_MIN, MURPHY_TOUCH_X_MAX, BoardConfig::ACTIVE.displayWidth - 1);
-  point.y = mapTouchAxis(rawY, MURPHY_TOUCH_Y_MIN, MURPHY_TOUCH_Y_MAX, BoardConfig::ACTIVE.displayHeight - 1);
+  point.x =
+      mapTouchAxis(rawX, BoardConfig::ACTIVE.touch.rawXMin, BoardConfig::ACTIVE.touch.rawXMax,
+                   BoardConfig::ACTIVE.displayWidth - 1);
+  point.y =
+      mapTouchAxis(rawY, BoardConfig::ACTIVE.touch.rawYMin, BoardConfig::ACTIVE.touch.rawYMax,
+                   BoardConfig::ACTIVE.displayHeight - 1);
   point.timestamp = millis();
   return true;
 }
@@ -280,6 +301,39 @@ void InputManager::update() {
 
       currentState = state;
     }
+  }
+}
+
+void InputManager::clearState() {
+  const unsigned long now = millis();
+  const uint8_t state = getState();
+
+  currentState = state;
+  lastState = state;
+  pressedEvents = 0;
+  releasedEvents = 0;
+  touchPressedEvent = false;
+  touchReleasedEvent = false;
+  touchPressed = false;
+  touchPoint = {false, 0, 0, 0};
+  touchIrqPulseUntil = 0;
+  touchReadPending = false;
+  lastDebounceTime = now;
+
+  if (state > 0) {
+    buttonPressStart = now;
+    buttonPressFinish = now;
+  } else {
+    buttonPressStart = 0;
+    buttonPressFinish = 0;
+  }
+
+  if (state & (1 << BTN_POWER)) {
+    powerButtonPressStart = now;
+    powerButtonPressFinish = now;
+  } else {
+    powerButtonPressStart = 0;
+    powerButtonPressFinish = 0;
   }
 }
 
