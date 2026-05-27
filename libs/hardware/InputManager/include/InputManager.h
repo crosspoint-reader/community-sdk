@@ -5,6 +5,13 @@
 
 class InputManager {
  public:
+  struct TouchPoint {
+    bool valid;
+    uint16_t x;
+    uint16_t y;
+    unsigned long timestamp;
+  };
+
   InputManager();
   void begin();
   uint8_t getState();
@@ -68,6 +75,12 @@ class InputManager {
    */
   unsigned long getPowerButtonHeldTime() const;
 
+  bool hasTouch() const;
+  bool isTouchPressed() const;
+  bool wasTouchPressed() const;
+  bool wasTouchReleased() const;
+  TouchPoint getTouchPoint() const;
+
   // Button indices
   static constexpr uint8_t BTN_BACK = 0;
   static constexpr uint8_t BTN_CONFIRM = 1;
@@ -91,19 +104,29 @@ class InputManager {
  private:
   int getButtonFromADC(int adcValue, const int ranges[], int numButtons);
   bool isDigitalPressed(int8_t pin) const;
-  void beginMurphyTouch();
-  uint8_t getMurphyTouchState();
-  bool readMurphyTouch(uint8_t data[5]);
+  uint8_t getTouchIrqState();
+  void updateTouchFromIrq(unsigned long now, int irqRaw);
+  bool readTouchPoint(TouchPoint& point);
+  bool decodeMurphyTouchFrame(const uint8_t* data, size_t len, TouchPoint& point) const;
+  uint16_t mapTouchAxis(uint16_t raw, uint16_t rawMin, uint16_t rawMax, uint16_t outMax) const;
 
   uint8_t currentState;
   uint8_t lastState;
   uint8_t pressedEvents;
   uint8_t releasedEvents;
-  bool murphyTouchAvailable;
-  bool murphyTouchLastPressed;
-  uint8_t murphyTouchLastX;
-  uint8_t murphyTouchLastY;
-  unsigned long murphyTouchLastLogTime;
+  bool touchIrqEnabled;
+  bool touchDataEnabled;
+  int touchIrqBaseline;
+  int touchIrqLast;
+  unsigned long touchIrqLastChangeTime;
+  unsigned long touchIrqPulseUntil;
+  bool touchReadPending;
+  unsigned long touchReadAt;
+  unsigned long touchReleaseAt;
+  bool touchPressed;
+  bool touchPressedEvent;
+  bool touchReleasedEvent;
+  TouchPoint touchPoint;
   unsigned long lastDebounceTime;
   unsigned long buttonPressStart;
   unsigned long buttonPressFinish;
@@ -118,6 +141,15 @@ class InputManager {
 
   static constexpr int ADC_NO_BUTTON = 3900;
   static constexpr unsigned long DEBOUNCE_DELAY = 5;
+  static constexpr unsigned long TOUCH_IRQ_DEBOUNCE_MS = 5;
+  static constexpr unsigned long TOUCH_IRQ_PULSE_MS = 120;
+  static constexpr unsigned long TOUCH_SAMPLE_DELAY_MS = 8;
+  static constexpr uint8_t TOUCH_READ_COMMAND = 0x00;
+  static constexpr uint8_t TOUCH_FRAME_SIZE = 16;
+  static constexpr uint16_t MURPHY_TOUCH_X_MIN = 24;
+  static constexpr uint16_t MURPHY_TOUCH_X_MAX = 224;
+  static constexpr uint16_t MURPHY_TOUCH_Y_MIN = 24;
+  static constexpr uint16_t MURPHY_TOUCH_Y_MAX = 392;
 
   static const char* BUTTON_NAMES[];
 };

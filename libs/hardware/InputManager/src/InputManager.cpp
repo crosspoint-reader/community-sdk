@@ -2,22 +2,6 @@
 
 #include <Wire.h>
 
-namespace {
-constexpr uint8_t MURPHY_TOUCH_ADDR = 0x2e;
-constexpr uint8_t MURPHY_TOUCH_OLD_FT_ADDR = 0x38;
-constexpr int MURPHY_TOUCH_SDA = 13;
-constexpr int MURPHY_TOUCH_SCL = 12;
-constexpr int MURPHY_TOUCH_INT = 44;
-constexpr int MURPHY_TOUCH_RST = 45;
-constexpr uint32_t MURPHY_TOUCH_I2C_HZ = 100000;
-constexpr unsigned long MURPHY_TOUCH_POLL_MS = 25;
-
-// CHSC6x-compatible framing used by ESPHome/espp/Zephyr:
-// byte 0 is pressed/nonzero, byte 2 is X, byte 4 is Y.
-constexpr uint8_t MURPHY_TOUCH_REG_STATUS = 0x00;
-constexpr uint8_t MURPHY_TOUCH_FRAME_LEN = 5;
-}  // namespace
-
 // Recorded ADC values from real devices
 // BACK CONF LEFT RGHT   UP DOWN
 // 3597 2760 1530    6 2300    6
@@ -41,11 +25,19 @@ InputManager::InputManager()
       lastState(0),
       pressedEvents(0),
       releasedEvents(0),
-      murphyTouchAvailable(false),
-      murphyTouchLastPressed(false),
-      murphyTouchLastX(0),
-      murphyTouchLastY(0),
-      murphyTouchLastLogTime(0),
+      touchIrqEnabled(false),
+      touchDataEnabled(false),
+      touchIrqBaseline(HIGH),
+      touchIrqLast(HIGH),
+      touchIrqLastChangeTime(0),
+      touchIrqPulseUntil(0),
+      touchReadPending(false),
+      touchReadAt(0),
+      touchReleaseAt(0),
+      touchPressed(false),
+      touchPressedEvent(false),
+      touchReleasedEvent(false),
+      touchPoint({false, 0, 0, 0}),
       lastDebounceTime(0),
       buttonPressStart(0),
       buttonPressFinish(0),
@@ -69,8 +61,20 @@ void InputManager::begin() {
     analogSetAttenuation(ADC_11db);
   }
 
-  if (BoardConfig::isMurphyM3()) {
-    beginMurphyTouch();
+  if (BoardConfig::ACTIVE.hasTouch && BoardConfig::ACTIVE.touch.irq >= 0) {
+    pinMode(BoardConfig::ACTIVE.touch.irq, INPUT);
+    touchIrqBaseline = digitalRead(BoardConfig::ACTIVE.touch.irq);
+    touchIrqLast = touchIrqBaseline;
+    touchIrqLastChangeTime = millis();
+    touchIrqPulseUntil = 0;
+    touchIrqEnabled = true;
+
+    if (BoardConfig::ACTIVE.touch.sda >= 0 && BoardConfig::ACTIVE.touch.scl >= 0 &&
+        BoardConfig::ACTIVE.touch.i2cAddress != 0) {
+      Wire.begin(BoardConfig::ACTIVE.touch.sda, BoardConfig::ACTIVE.touch.scl, 100000);
+      Wire.setTimeOut(4);
+      touchDataEnabled = true;
+    }
   }
 }
 
@@ -95,7 +99,8 @@ uint8_t InputManager::getState() {
     if (isDigitalPressed(BoardConfig::ACTIVE.input.up)) state |= (1 << BTN_UP);
     if (isDigitalPressed(BoardConfig::ACTIVE.input.down)) state |= (1 << BTN_DOWN);
     if (isDigitalPressed(BoardConfig::ACTIVE.input.power)) state |= (1 << BTN_POWER);
-    return state | getMurphyTouchState();
+    state |= getTouchIrqState();
+    return state;
   }
 
   // Read GPIO1 buttons
@@ -117,111 +122,126 @@ uint8_t InputManager::getState() {
     state |= (1 << BTN_POWER);
   }
 
-  return state | getMurphyTouchState();
-}
-
-void InputManager::beginMurphyTouch() {
-  pinMode(MURPHY_TOUCH_INT, INPUT_PULLUP);
-  pinMode(MURPHY_TOUCH_RST, OUTPUT);
-  digitalWrite(MURPHY_TOUCH_RST, LOW);
-  delay(5);
-  digitalWrite(MURPHY_TOUCH_RST, HIGH);
-  delay(50);
-
-  Wire.begin(MURPHY_TOUCH_SDA, MURPHY_TOUCH_SCL, MURPHY_TOUCH_I2C_HZ);
-  Wire.setTimeOut(4);
-
-  Wire.beginTransmission(MURPHY_TOUCH_ADDR);
-  murphyTouchAvailable = (Wire.endTransmission(true) == 0);
-
-  Wire.beginTransmission(MURPHY_TOUCH_OLD_FT_ADDR);
-  const bool oldFtAck = (Wire.endTransmission(true) == 0);
-
-#ifdef ENABLE_SERIAL_LOG
-  Serial.printf("[%lu] [TOUCH] Murphy touch init chsc=0x%02X ack=%d old_ft=0x%02X ack=%d sda=%d scl=%d int=%d rst=%d\n", millis(),
-                MURPHY_TOUCH_ADDR, murphyTouchAvailable, MURPHY_TOUCH_OLD_FT_ADDR, oldFtAck, MURPHY_TOUCH_SDA,
-                MURPHY_TOUCH_SCL, MURPHY_TOUCH_INT, MURPHY_TOUCH_RST);
-#endif
-}
-
-bool InputManager::readMurphyTouch(uint8_t data[5]) {
-  Wire.beginTransmission(MURPHY_TOUCH_ADDR);
-  Wire.write(MURPHY_TOUCH_REG_STATUS);
-  if (Wire.endTransmission(false) != 0) {
-    return false;
-  }
-
-  const uint8_t read = Wire.requestFrom(MURPHY_TOUCH_ADDR, MURPHY_TOUCH_FRAME_LEN, static_cast<uint8_t>(true));
-  if (read != MURPHY_TOUCH_FRAME_LEN) {
-    while (Wire.available()) {
-      Wire.read();
-    }
-    return false;
-  }
-
-  for (uint8_t i = 0; i < MURPHY_TOUCH_FRAME_LEN; ++i) {
-    data[i] = Wire.read();
-  }
-  return true;
-}
-
-uint8_t InputManager::getMurphyTouchState() {
-  if (!BoardConfig::isMurphyM3() || !murphyTouchAvailable) {
-    return 0;
-  }
-
-  static unsigned long lastPoll = 0;
-  const unsigned long now = millis();
-  if (now - lastPoll < MURPHY_TOUCH_POLL_MS) {
-    if (!murphyTouchLastPressed) {
-      return 0;
-    }
-  } else {
-    lastPoll = now;
-    uint8_t data[MURPHY_TOUCH_FRAME_LEN] = {};
-    if (!readMurphyTouch(data)) {
-      murphyTouchLastPressed = false;
-      return 0;
-    }
-
-    murphyTouchLastPressed = data[0] == 1;
-    murphyTouchLastX = data[2];
-    murphyTouchLastY = data[4];
-
-#ifdef ENABLE_SERIAL_LOG
-    if (murphyTouchLastPressed || now - murphyTouchLastLogTime > 2000) {
-      Serial.printf("[%lu] [TOUCH] chsc6x raw=%02X %02X %02X %02X %02X pressed=%d x=%u y=%u int=%d\n", now, data[0],
-                    data[1], data[2], data[3], data[4], murphyTouchLastPressed, murphyTouchLastX, murphyTouchLastY,
-                    digitalRead(MURPHY_TOUCH_INT));
-      murphyTouchLastLogTime = now;
-    }
-#endif
-  }
-
-  if (!murphyTouchLastPressed) {
-    return 0;
-  }
-
-  // Temporary global touch navigation until per-view hit targets exist:
-  // left edge = Back, top third = Up/PageBack, bottom third = Down/PageForward, center = Confirm.
-  if (murphyTouchLastX < 32) {
-    return 1 << BTN_BACK;
-  }
-  if (murphyTouchLastY < 85) {
-    return 1 << BTN_UP;
-  }
-  if (murphyTouchLastY > 170) {
-    return 1 << BTN_DOWN;
-  }
-  return 1 << BTN_CONFIRM;
+  state |= getTouchIrqState();
+  return state;
 }
 
 bool InputManager::isDigitalPressed(int8_t pin) const {
   return pin >= 0 && digitalRead(pin) == LOW;
 }
 
+uint8_t InputManager::getTouchIrqState() {
+  if (!touchIrqEnabled) {
+    return 0;
+  }
+
+  const unsigned long now = millis();
+  const int raw = digitalRead(BoardConfig::ACTIVE.touch.irq);
+  updateTouchFromIrq(now, raw);
+
+  if (raw != touchIrqLast && now - touchIrqLastChangeTime >= TOUCH_IRQ_DEBOUNCE_MS) {
+    touchIrqLast = raw;
+    touchIrqLastChangeTime = now;
+    if (raw != touchIrqBaseline) {
+      touchIrqPulseUntil = now + TOUCH_IRQ_PULSE_MS;
+    }
+  }
+
+  return now < touchIrqPulseUntil ? (1 << BTN_CONFIRM) : 0;
+}
+
+void InputManager::updateTouchFromIrq(const unsigned long now, const int irqRaw) {
+  if (!touchDataEnabled) {
+    return;
+  }
+
+  if (irqRaw != touchIrqLast && now - touchIrqLastChangeTime >= TOUCH_IRQ_DEBOUNCE_MS && irqRaw != touchIrqBaseline) {
+    touchReadPending = true;
+    touchReadAt = now + TOUCH_SAMPLE_DELAY_MS;
+  }
+
+  if (touchReadPending && now >= touchReadAt) {
+    TouchPoint point = {false, 0, 0, 0};
+    touchReadPending = false;
+    if (readTouchPoint(point)) {
+      touchPoint = point;
+      touchPressed = true;
+      touchPressedEvent = true;
+      touchReleaseAt = now + TOUCH_IRQ_PULSE_MS;
+#ifdef ENABLE_SERIAL_LOG
+      Serial.printf("[%lu] [TOUCH] point x=%u y=%u ts=%lu\n", now, point.x, point.y, point.timestamp);
+#endif
+    }
+  }
+
+  if (touchPressed && irqRaw != touchIrqBaseline) {
+    touchReleaseAt = now + TOUCH_IRQ_PULSE_MS;
+  }
+
+  if (touchPressed && now >= touchReleaseAt) {
+    touchPressed = false;
+    touchReleasedEvent = true;
+  }
+}
+
+bool InputManager::readTouchPoint(TouchPoint& point) {
+  Wire.beginTransmission(BoardConfig::ACTIVE.touch.i2cAddress);
+  Wire.write(TOUCH_READ_COMMAND);
+  if (Wire.endTransmission(false) != 0) {
+    return false;
+  }
+
+  uint8_t data[TOUCH_FRAME_SIZE] = {};
+  const uint8_t received = Wire.requestFrom(BoardConfig::ACTIVE.touch.i2cAddress, TOUCH_FRAME_SIZE, true);
+  if (received != TOUCH_FRAME_SIZE) {
+    while (Wire.available()) {
+      Wire.read();
+    }
+    return false;
+  }
+
+  for (uint8_t i = 0; i < TOUCH_FRAME_SIZE; ++i) {
+    data[i] = Wire.read();
+  }
+
+  return decodeMurphyTouchFrame(data, TOUCH_FRAME_SIZE, point);
+}
+
+bool InputManager::decodeMurphyTouchFrame(const uint8_t* data, const size_t len, TouchPoint& point) const {
+  if (len < 7 || (data[0] != 0x00 && data[0] != 0x36)) {
+    return false;
+  }
+
+  const uint16_t rawX = data[4];
+  const uint16_t rawY = (static_cast<uint16_t>(data[5]) << 8) | data[6];
+  if ((rawX == 0 && rawY == 0) || (rawX == 0xff && rawY == 0xffff)) {
+    return false;
+  }
+
+  point.valid = true;
+  point.x = mapTouchAxis(rawX, MURPHY_TOUCH_X_MIN, MURPHY_TOUCH_X_MAX, BoardConfig::ACTIVE.displayWidth - 1);
+  point.y = mapTouchAxis(rawY, MURPHY_TOUCH_Y_MIN, MURPHY_TOUCH_Y_MAX, BoardConfig::ACTIVE.displayHeight - 1);
+  point.timestamp = millis();
+  return true;
+}
+
+uint16_t InputManager::mapTouchAxis(uint16_t raw, const uint16_t rawMin, const uint16_t rawMax,
+                                    const uint16_t outMax) const {
+  if (raw <= rawMin) {
+    return 0;
+  }
+  if (raw >= rawMax) {
+    return outMax;
+  }
+  return static_cast<uint32_t>(raw - rawMin) * outMax / (rawMax - rawMin);
+}
+
 void InputManager::update() {
   const unsigned long currentTime = millis();
+
+  touchPressedEvent = false;
+  touchReleasedEvent = false;
+
   const uint8_t state = getState();
 
   // Always clear events first
@@ -298,6 +318,26 @@ unsigned long InputManager::getPowerButtonHeldTime() const {
   }
 
   return powerButtonPressFinish - powerButtonPressStart;
+}
+
+bool InputManager::hasTouch() const {
+  return touchDataEnabled;
+}
+
+bool InputManager::isTouchPressed() const {
+  return touchPressed;
+}
+
+bool InputManager::wasTouchPressed() const {
+  return touchPressedEvent;
+}
+
+bool InputManager::wasTouchReleased() const {
+  return touchReleasedEvent;
+}
+
+InputManager::TouchPoint InputManager::getTouchPoint() const {
+  return touchPoint;
 }
 
 const char* InputManager::getButtonName(const uint8_t buttonIndex) {

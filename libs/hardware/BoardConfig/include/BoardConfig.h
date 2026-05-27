@@ -44,6 +44,14 @@ struct FrontlightConfig {
   bool activeHigh;
 };
 
+struct TouchPins {
+  int8_t irq;
+  int8_t reset;
+  int8_t sda;
+  int8_t scl;
+  uint8_t i2cAddress;
+};
+
 struct BoardProfile {
   Board board;
   const char* name;
@@ -55,6 +63,7 @@ struct BoardProfile {
   SdPins sd;
   InputPins input;
   FrontlightConfig frontlight;
+  TouchPins touch;
   int8_t batteryAdc;
   int8_t usbDetect;
   bool hasTouch;
@@ -74,6 +83,7 @@ constexpr BoardProfile XTEINK_X4 = {Board::XteinkX4,
                                     {PIN_UNASSIGNED, 7, PIN_UNASSIGNED, 12, PIN_UNASSIGNED, false},
                                     {0, 1, 2, 3, 4, 5, 3},
                                     {PIN_UNASSIGNED, 0, 0, true},
+                                    {PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, 0},
                                     0,
                                     20,
                                     false,
@@ -95,6 +105,8 @@ constexpr BoardProfile MURPHY_M3 = {Board::MurphyM3,
                                     // GPIO0 is also treated as power so a long bottom-button hold sleeps.
                                     {PIN_UNASSIGNED, 0, PIN_UNASSIGNED, PIN_UNASSIGNED, 1, 2, 0},
                                     {48, 25000, 10, true},
+                                    // CHSC6x-style touch: IRQ=GPIO44 active-low, I2C SDA=13/SCL=12, addr=0x2e.
+                                    {44, 45, 13, 12, 0x2e},
                                     PIN_UNASSIGNED,
                                     PIN_UNASSIGNED,
                                     true,

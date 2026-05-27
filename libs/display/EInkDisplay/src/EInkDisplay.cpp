@@ -146,6 +146,40 @@ static constexpr uint8_t MURPHY_LUT_24_FAST[] = {
 #define MURPHY_GHOST_CLEAR_INTERVAL 8
 #endif
 
+// Note: hand-tuned grayscale LUTs and soft-text LUT_24 variant were
+// previously defined here. They were removed when Murphy shipped
+// AA-disabled (the application layer skips the AA two-pass path via
+// DeviceProfile::supportsGrayscaleAntiAlias). See
+// Murphy_M3/findings/display_lut_refresh.md for the full bench-tuned
+// recipe if anyone revisits grayscale on this panel.
+
+// Hand-tuned 4-level grayscale LUT set for Murphy.
+//
+// The previous "factory grayscale LUT" hypothesis was wrong: the bytes at
+// 0x3c236d24+ turned out to be code/data structs (referenced via ESP32-S3
+// DROM/IROM aliasing) that happened to produce visible-but-washed-out
+// grayscale by coincidence. These hand-tuned tables replace them.
+//
+// Design: each LUT runs a single 7-byte phase with 4 sub-phase bytes. The
+// proven voltage codes from the working FAST B/W LUTs are 0x88 (drives toward
+// white) and 0x48 (drives toward black). Mixing those across the 4 sub-phases
+// gives proportional net displacement, producing 4 graduated intensities:
+//
+//   LUT | (DTM1,DTM2) | renderer value | sub-phases       | target
+//   ----+-------------+----------------+------------------+--------
+//   24  | (0,0)       | 0 / 3 (white)  | 88 88 88 88      | 100% W
+//   23  | (1,0)       | 1 / 3          | 88 88 88 48      | ~50% W
+//   22  | (0,1)       | 2 / 3          | 88 48 48 48      | ~50% B
+//   21  | (1,1)       | 3 / 3 (black)  | 48 48 48 48      | 100% B
+//
+// VCOM tracks the active phase with 0x08 (matches the FAST B/W VCOM pattern).
+// Plane mapping: renderer LSB -> DTM1 (0x10), renderer MSB -> DTM2 (0x13).
+//
+// Tuning levers if intermediates aren't where you want them:
+//   - Bump phase repeat (byte 0) from 0x01 to 0x02..0x04 to multiply drive time.
+//   - Shift the mix point (e.g. 88 88 48 48 for a darker light-gray).
+//   - Symmetry tweak: if LUT_23 looks too dark vs LUT_22, balance the sub-phase
+//     positions so equal numbers of "off-direction" bytes appear.
 // Alternate OEM power_setting payload (0x3c236ca3). The simple branch — used by
 // initMurphyM3Controller() today — uses {0x03,0x10,0x3F,0x3B,0x0D}.
 static constexpr uint8_t MURPHY_OEM_POWER_SETTING_ALT[] = {0x03, 0x10, 0x3F, 0x3F, 0x03};
@@ -713,7 +747,21 @@ void EInkDisplay::loadMurphyM3FastLut() {
 void EInkDisplay::initMurphyM3Controller() {
   if (Serial) Serial.printf("[%lu]   Initializing Murphy UC8253 controller with OEM sequence...\n", millis());
 
+  // The OEM has two init variants. The default "simple" payload works fine
+  // for B/W refresh with the default LUTs. The "alt" payload is paired in
+  // the OEM with the gray LUT set (different source voltage and VCOM-DC) and
+  // is hypothesised to give the gray LUTs their intended drive levels —
+  // running the gray LUTs under the simple init produces visibly washed-out
+  // grayscale, consistent with under-driven source rails.
+  //
+  // Build with -DMURPHY_USE_ALT_POWER_SETTING to use the alt init globally.
+  // If this breaks B/W contrast, the next step is a dynamic re-init between
+  // B/W and grayscale modes.
+#ifdef MURPHY_USE_ALT_POWER_SETTING
+  const uint8_t powerSetting[] = {0x03, 0x10, 0x3F, 0x3F, 0x03};
+#else
   const uint8_t powerSetting[] = {0x03, 0x10, 0x3F, 0x3B, 0x0D};
+#endif
   sendCommand(CMD_UC8253_POWER_SETTING);
   sendData(powerSetting, sizeof(powerSetting));
 
@@ -968,10 +1016,23 @@ void EInkDisplay::setFramebuffer(const uint8_t* bwBuffer) const {
   memcpy(frameBuffer, bwBuffer, bufferSize);
 }
 
-// Murphy's framebuffer convention is bit=1 means white pixel (init fills 0xFF,
-// clearScreen defaults to 0xFF). The grayscale renderer feeds LSB/MSB planes
-// using the opposite convention (bit=1 means dark). Invert when ingesting a
-// grayscale plane as the source-of-truth framebuffer for Murphy.
+// Plane-copy helpers for Murphy grayscale ingest.
+//
+// Murphy's B/W framebuffer uses bit=1 means white pixel (init fills 0xFF,
+// panel goes white). The renderer's grayscale planes use the opposite
+// convention (bit=1 means dark). When the OEM gray LUTs drive the panel they
+// expect the renderer's native convention (verified on hardware: copying
+// inverted bits produces a fully inverted display, copying direct produces a
+// correctly polarised image). So:
+//
+//   * copyGrayPlaneDirect   — used by the grayscale path that loads the gray
+//                             LUTs (renderer's bit=1=dark matches LUT expectation).
+//   * copyGrayPlaneInverted — kept available for any future caller that wants
+//                             to treat a grayscale buffer as a B/W framebuffer
+//                             (rare; not currently used).
+static void copyGrayPlaneDirect(uint8_t* dst, const uint8_t* src, uint32_t bytes) {
+  memcpy(dst, src, bytes);
+}
 static void copyGrayPlaneInverted(uint8_t* dst, const uint8_t* src, uint32_t bytes) {
   for (uint32_t i = 0; i < bytes; i++) {
     dst[i] = static_cast<uint8_t>(~src[i]);
@@ -1014,8 +1075,12 @@ void EInkDisplay::copyGrayscaleLsbBuffers(const uint8_t* lsbBuffer) {
   }
 
   if (_murphyM3Mode) {
-    copyGrayPlaneInverted(frameBuffer, lsbBuffer, bufferSize);
-    _x3GrayState.lsbValid = true;
+    // Murphy ships AA-on as 1-bit through the B/W FAST path. The renderer
+    // calls copyGrayscaleLsbBuffers with an AA-overlay plane intended for
+    // grayscale-pipeline use; stuffing that into frameBuffer corrupts the
+    // already-correct text frame produced by the prior B/W refresh. No-op
+    // here so the subsequent displayBuffer / displayGrayBuffer call just
+    // re-displays the existing B/W content.
     return;
   }
 
@@ -1048,7 +1113,11 @@ void EInkDisplay::copyGrayscaleMsbBuffers(const uint8_t* msbBuffer) {
   }
 
   if (_murphyM3Mode) {
-    copyGrayPlaneInverted(frameBuffer, msbBuffer, bufferSize);
+    // Store MSB plane in murphyM3PreviousFrame (reused as MSB buffer for
+    // grayscale). Previous-frame tracking isn't used for B/W refresh anyway
+    // — every B/W refresh writes the current frame to both planes — so
+    // there's no conflict.
+    copyGrayPlaneDirect(murphyM3PreviousFrame, msbBuffer, bufferSize);
     return;
   }
 
@@ -1079,10 +1148,10 @@ void EInkDisplay::copyGrayscaleMsbBuffers(const uint8_t* msbBuffer) {
 
 void EInkDisplay::copyGrayscaleBuffers(const uint8_t* lsbBuffer, const uint8_t* msbBuffer) {
   if (_murphyM3Mode) {
-    const uint8_t* src = msbBuffer ? msbBuffer : lsbBuffer;
-    if (src) {
-      copyGrayPlaneInverted(frameBuffer, src, bufferSize);
-    }
+    // Murphy AA-on path: ignore the renderer's grayscale planes; the B/W
+    // base rendered before this call already populated frameBuffer with
+    // a correct 1-bit image, and the renderer's AA-overlay plane only
+    // makes sense for a real grayscale pipeline.
     return;
   }
 
@@ -1106,8 +1175,8 @@ void EInkDisplay::writeGrayscalePlaneStrip(GrayPlane plane, const uint8_t* rows,
 
   if (_murphyM3Mode) {
     for (uint16_t row = 0; row < numRows; row++) {
-      copyGrayPlaneInverted(frameBuffer + static_cast<uint32_t>(yStart + row) * displayWidthBytes,
-                            rows + static_cast<uint32_t>(row) * displayWidthBytes, displayWidthBytes);
+      copyGrayPlaneDirect(frameBuffer + static_cast<uint32_t>(yStart + row) * displayWidthBytes,
+                          rows + static_cast<uint32_t>(row) * displayWidthBytes, displayWidthBytes);
     }
     return;
   }
@@ -1135,6 +1204,15 @@ void EInkDisplay::writeGrayscalePlaneStrip(GrayPlane plane, const uint8_t* rows,
  * grayscale display.
  */
 void EInkDisplay::cleanupGrayscaleBuffers(const uint8_t* bwBuffer) {
+  if (_murphyM3Mode) {
+    // Murphy doesn't use SSD1677-style RED RAM; the B/W FAST refresh path
+    // already keeps the controller's planes in sync. Restoring the bwBuffer
+    // here would just fire 0x44/0x45/0x4E/0x4F/0x26 commands at the UC8253
+    // controller, which interprets them as garbage and can leave it in a
+    // bad state. No-op for Murphy.
+    (void)bwBuffer;
+    return;
+  }
   if (_x3Mode) {
     if (!bwBuffer) {
       return;
@@ -1493,10 +1571,17 @@ void EInkDisplay::displayGrayBuffer(const bool turnOffScreen, const unsigned cha
   (void)lut;
   (void)factoryMode;
   if (_murphyM3Mode) {
-    // Murphy is a 1-bit panel — there's no true grayscale path. The grayscale
-    // buffer was already ingested via copyGrayscale* with inverted polarity to
-    // match Murphy's framebuffer convention. Route through the normal fast
-    // refresh so we get a flash-free update.
+    // Murphy ships AA-on as 1-bit. Hand-tuned grayscale LUTs work cleanly
+    // for uniform regions (verified via the murphy_grayscale_tuning_probe)
+    // but the application-side renderer produces multiple successive
+    // displayGrayBuffer calls with degenerate plane contents (some frames
+    // all-dark, some all-zero) which our LUTs faithfully render as
+    // "everything dark gray" or "everything white" — visually destroys
+    // the page even though each refresh in isolation is correct.
+    //
+    // Route through the B/W FAST path instead. frameBuffer already holds
+    // the renderer's LSB plane (from copyGrayscaleLsbBuffers) which is a
+    // workable threshold rasterisation of the AA glyphs.
     displayBuffer(FAST_REFRESH, turnOffScreen);
     return;
   }
