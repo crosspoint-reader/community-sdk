@@ -293,7 +293,10 @@ void EInkDisplay::begin() {
     auto cfg = M5.config();
     M5.begin(cfg);
     M5.Display.setRotation(0);
+    M5.Display.setEpdMode(m5gfx::epd_quality);
     M5.Display.clear(TFT_WHITE);
+    M5.Display.display();
+    M5.Display.waitDisplay();
     if (Serial) Serial.printf("[%lu]   M5 PaperColor display initialized\n", millis());
     isScreenOn = true;
     return;
@@ -816,6 +819,18 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
       return;
     }
     M5.update();
+    switch (mode) {
+      case FULL_REFRESH:
+        M5.Display.setEpdMode(m5gfx::epd_quality);
+        break;
+      case HALF_REFRESH:
+        M5.Display.setEpdMode(m5gfx::epd_text);
+        break;
+      case FAST_REFRESH:
+      default:
+        M5.Display.setEpdMode(m5gfx::epd_fast);
+        break;
+    }
     M5.Display.startWrite();
     for (uint16_t y = 0; y < displayHeight; ++y) {
       const uint32_t rowOffset = static_cast<uint32_t>(y) * displayWidthBytes;
@@ -826,6 +841,7 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
     }
     M5.Display.endWrite();
     M5.Display.display();
+    M5.Display.waitDisplay();
     if (turnOffScreen) {
       deepSleep();
     }
