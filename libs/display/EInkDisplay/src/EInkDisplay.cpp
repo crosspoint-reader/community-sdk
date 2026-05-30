@@ -1,14 +1,56 @@
 #include "EInkDisplay.h"
 
 #include <BoardConfig.h>
+#include <Wire.h>
 
-#if defined(BOARD_M5STACK_PAPERCOLOR) || defined(CROSSPOINT_BOARD_M5STACK_PAPERCOLOR)
-#include <M5Unified.h>
-#endif
-
+#include <algorithm>
 #include <cstring>
 #include <fstream>
 #include <vector>
+
+namespace {
+#if defined(BOARD_M5STACK_PAPERCOLOR) || defined(CROSSPOINT_BOARD_M5STACK_PAPERCOLOR)
+constexpr uint8_t M5PM1_ADDR = 0x6E;
+constexpr uint8_t M5PM1_LDO_ENABLE_REG = 0x06;
+constexpr uint8_t M5PM1_WATCHDOG_REG = 0x09;
+constexpr int M5_INTERNAL_I2C_SDA = 3;
+constexpr int M5_INTERNAL_I2C_SCL = 2;
+constexpr uint32_t M5_INTERNAL_I2C_FREQ = 100000;
+
+void m5Pm1WriteReg(uint8_t reg, uint8_t value) {
+  Wire.beginTransmission(M5PM1_ADDR);
+  Wire.write(reg);
+  Wire.write(value);
+  Wire.endTransmission();
+}
+
+bool m5Pm1ReadReg(uint8_t reg, uint8_t* value) {
+  Wire.beginTransmission(M5PM1_ADDR);
+  Wire.write(reg);
+  if (Wire.endTransmission(false) != 0) {
+    return false;
+  }
+  if (Wire.requestFrom(M5PM1_ADDR, static_cast<uint8_t>(1)) != 1) {
+    return false;
+  }
+  *value = Wire.read();
+  return true;
+}
+
+void enableM5PaperColorEpdPower() {
+  Wire.begin(M5_INTERNAL_I2C_SDA, M5_INTERNAL_I2C_SCL, M5_INTERNAL_I2C_FREQ);
+  Wire.setTimeOut(4);
+  m5Pm1WriteReg(M5PM1_WATCHDOG_REG, 0x00);
+
+  uint8_t ldoEnable = 0;
+  if (m5Pm1ReadReg(M5PM1_LDO_ENABLE_REG, &ldoEnable)) {
+    m5Pm1WriteReg(M5PM1_LDO_ENABLE_REG, ldoEnable | 0x04);
+  }
+}
+#else
+void enableM5PaperColorEpdPower() {}
+#endif
+}  // namespace
 
 // SSD1677 command definitions
 // Initialization and reset
@@ -227,7 +269,9 @@ void EInkDisplay::setDisplayX3() {
 }
 
 void EInkDisplay::setDisplayM5PaperColor() {
-  setDisplayDimensions(400, 600);
+  // Keep the same landscape memory layout CrossPoint uses internally. The
+  // PaperColor panel is physically 600x400; the app treats it as 400x600.
+  setDisplayDimensions(600, 400);
   _m5PaperColorMode = true;
 }
 
@@ -255,6 +299,7 @@ EInkDisplay::EInkDisplay(int8_t sclk, int8_t mosi, int8_t cs, int8_t dc, int8_t 
 #ifndef EINK_DISPLAY_SINGLE_BUFFER_MODE
       frameBufferActive(nullptr),
 #endif
+      _m5LastFrameValid(false),
       customLutActive(false) {
   if (Serial) Serial.printf("[%lu] EInkDisplay: Constructor called\n", millis());
   if (Serial) Serial.printf("[%lu]   SCLK=%d, MOSI=%d, CS=%d, DC=%d, RST=%d, BUSY=%d\n", millis(), sclk, mosi, cs, dc, rst, busy);
@@ -278,6 +323,7 @@ void EInkDisplay::begin() {
   _x3InitialFullSyncsRemaining = _x3Mode ? 2 : 0;
   _x3ForceFullSyncNext = false;
   _x3ForcedConditionPassesNext = 0;
+  _m5LastFrameValid = false;
   _x3GrayState = {};
 #ifdef EINK_DISPLAY_SINGLE_BUFFER_MODE
   if (Serial) Serial.printf("[%lu]   Static frame buffer (%lu bytes)\n", millis(), bufferSize);
@@ -288,18 +334,22 @@ void EInkDisplay::begin() {
 
   if (Serial) Serial.printf("[%lu]   Initializing e-ink display driver...\n", millis());
 
-#if defined(BOARD_M5STACK_PAPERCOLOR) || defined(CROSSPOINT_BOARD_M5STACK_PAPERCOLOR)
   if (_m5PaperColorMode) {
-    auto cfg = M5.config();
-    cfg.clear_display = false;
-    M5.begin(cfg);
-    M5.Display.setRotation(0);
-    M5.Display.setEpdMode(m5gfx::epd_quality);
-    if (Serial) Serial.printf("[%lu]   M5 PaperColor display initialized\n", millis());
+    enableM5PaperColorEpdPower();
+    SPI.begin(_sclk, -1, _mosi, _cs);
+    spiSettings = SPISettings(10000000, MSBFIRST, SPI_MODE0);
+    pinMode(_cs, OUTPUT);
+    pinMode(_dc, OUTPUT);
+    pinMode(_rst, OUTPUT);
+    pinMode(_busy, INPUT_PULLUP);
+    digitalWrite(_cs, HIGH);
+    digitalWrite(_dc, HIGH);
+    resetDisplay();
+    initM5PaperColorController();
+    if (Serial) Serial.printf("[%lu]   M5 PaperColor native ED2208 display initialized\n", millis());
     isScreenOn = true;
     return;
   }
-#endif
 
   // Initialize SPI with custom pins
   SPI.begin(_sclk, -1, _mosi, _cs);
@@ -396,6 +446,111 @@ void EInkDisplay::sendData(const uint8_t* data, uint16_t length) {
   SPI.writeBytes(data, length);  // Transfer all bytes
   digitalWrite(_cs, HIGH);       // Deselect chip
   SPI.endTransaction();
+}
+
+void EInkDisplay::sendM5PaperColorCommandData(uint8_t command, const uint8_t* data, uint16_t length) {
+  SPI.beginTransaction(spiSettings);
+  digitalWrite(_dc, LOW);
+  digitalWrite(_cs, LOW);
+  SPI.transfer(command);
+  if (data != nullptr && length > 0) {
+    digitalWrite(_dc, HIGH);
+    SPI.writeBytes(data, length);
+  }
+  digitalWrite(_cs, HIGH);
+  SPI.endTransaction();
+}
+
+void EInkDisplay::waitM5PaperColorBusy(const char* comment) {
+  const unsigned long start = millis();
+  while (digitalRead(_busy) == LOW) {
+    delay(10);
+    if (millis() - start > 30000) {
+      break;
+    }
+  }
+  delay(200);
+  if (comment && Serial) {
+    Serial.printf("[%lu]   M5 PaperColor wait complete: %s (%lu ms)\n", millis(), comment, millis() - start);
+  }
+}
+
+void EInkDisplay::initM5PaperColorController() {
+  static constexpr uint8_t initCommands[] = {
+      0xAA, 6, 0x49, 0x55, 0x20, 0x08, 0x09, 0x18,  // CMDH
+      0x01, 1, 0x3F,
+      0x00, 2, 0x5F, 0x69,
+      0x05, 4, 0x40, 0x1F, 0x1F, 0x2C,
+      0x08, 4, 0x6F, 0x1F, 0x1F, 0x22,
+      0x06, 4, 0x6F, 0x1F, 0x17, 0x17,
+      0x03, 4, 0x03, 0x54, 0x00, 0x44,
+      0x60, 2, 0x02, 0x00,
+      0x30, 1, 0x08,
+      0x50, 1, 0x3F,
+      0xE3, 1, 0x2F,
+      0x84, 1, 0x01,
+  };
+
+  for (size_t i = 0; i < sizeof(initCommands);) {
+    const uint8_t command = initCommands[i++];
+    const uint8_t length = initCommands[i++];
+    waitM5PaperColorBusy();
+    sendM5PaperColorCommandData(command, &initCommands[i], length);
+    i += length;
+  }
+
+  const uint8_t resolution[] = {static_cast<uint8_t>((displayWidth >> 8) & 0xFF),
+                                static_cast<uint8_t>(displayWidth & 0xFF),
+                                static_cast<uint8_t>((displayHeight >> 8) & 0xFF),
+                                static_cast<uint8_t>(displayHeight & 0xFF)};
+  waitM5PaperColorBusy();
+  sendM5PaperColorCommandData(0x61, resolution, sizeof(resolution));
+}
+
+void EInkDisplay::writeM5PaperColorFrame(const uint8_t* buffer) {
+  static constexpr uint8_t EPD_BLACK = 0x0;
+  static constexpr uint8_t EPD_WHITE = 0x1;
+  uint8_t packedRow[300];
+
+  SPI.beginTransaction(spiSettings);
+  digitalWrite(_dc, LOW);
+  digitalWrite(_cs, LOW);
+  SPI.transfer(0x10);
+  digitalWrite(_dc, HIGH);
+
+  for (uint16_t y = 0; y < displayHeight; ++y) {
+    const uint32_t rowOffset = static_cast<uint32_t>(y) * displayWidthBytes;
+    for (uint16_t x = 0; x < displayWidth; x += 2) {
+      const bool leftWhite = (buffer[rowOffset + (x >> 3)] >> (7 - (x & 7))) & 0x01;
+      const bool rightWhite = (buffer[rowOffset + ((x + 1) >> 3)] >> (7 - ((x + 1) & 7))) & 0x01;
+      const uint8_t left = leftWhite ? EPD_WHITE : EPD_BLACK;
+      const uint8_t right = rightWhite ? EPD_WHITE : EPD_BLACK;
+      packedRow[x >> 1] = static_cast<uint8_t>((left << 4) | right);
+    }
+    SPI.writeBytes(packedRow, displayWidth / 2);
+  }
+
+  digitalWrite(_cs, HIGH);
+  SPI.endTransaction();
+}
+
+void EInkDisplay::refreshM5PaperColor() {
+  sendM5PaperColorCommandData(0x04, nullptr, 0);
+  waitM5PaperColorBusy("power on");
+  delay(200);
+
+  const uint8_t booster[] = {0x6F, 0x1F, 0x17, 0x27};
+  sendM5PaperColorCommandData(0x06, booster, sizeof(booster));
+  delay(200);
+
+  const uint8_t refreshArg = 0x00;
+  sendM5PaperColorCommandData(0x12, &refreshArg, 1);
+  waitM5PaperColorBusy("refresh");
+
+  const uint8_t powerOffArg = 0x00;
+  sendM5PaperColorCommandData(0x02, &powerOffArg, 1);
+  waitM5PaperColorBusy("power off");
+  delay(200);
 }
 
 void EInkDisplay::waitWhileBusy(const char* comment) {
@@ -811,41 +966,32 @@ void EInkDisplay::cleanupGrayscaleBuffers(const uint8_t* bwBuffer) {
 #endif
 
 void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
-#if defined(BOARD_M5STACK_PAPERCOLOR) || defined(CROSSPOINT_BOARD_M5STACK_PAPERCOLOR)
+  (void)mode;
   if (_m5PaperColorMode) {
     if (!frameBuffer) {
       return;
     }
-    M5.update();
-    switch (mode) {
-      case FULL_REFRESH:
-        M5.Display.setEpdMode(m5gfx::epd_quality);
-        break;
-      case HALF_REFRESH:
-        M5.Display.setEpdMode(m5gfx::epd_text);
-        break;
-      case FAST_REFRESH:
-      default:
-        M5.Display.setEpdMode(m5gfx::epd_fast);
-        break;
-    }
-    M5.Display.startWrite();
-    for (uint16_t y = 0; y < displayHeight; ++y) {
-      const uint32_t rowOffset = static_cast<uint32_t>(y) * displayWidthBytes;
-      for (uint16_t x = 0; x < displayWidth; ++x) {
-        const bool white = (frameBuffer[rowOffset + (x >> 3)] >> (7 - (x & 7))) & 0x01;
-        M5.Display.drawPixel(x, y, white ? TFT_WHITE : TFT_BLACK);
+#ifndef EINK_DISPLAY_SINGLE_BUFFER_MODE
+    if (_m5LastFrameValid && frameBufferActive && memcmp(frameBufferActive, frameBuffer, bufferSize) == 0) {
+      if (turnOffScreen) {
+        deepSleep();
       }
+      return;
     }
-    M5.Display.endWrite();
-    M5.Display.display();
-    M5.Display.waitDisplay();
+#endif
+    writeM5PaperColorFrame(frameBuffer);
+    refreshM5PaperColor();
+#ifndef EINK_DISPLAY_SINGLE_BUFFER_MODE
+    if (frameBufferActive) {
+      memcpy(frameBufferActive, frameBuffer, bufferSize);
+      _m5LastFrameValid = true;
+    }
+#endif
     if (turnOffScreen) {
       deepSleep();
     }
     return;
   }
-#endif
 
   if (!_x3Mode && !isScreenOn && !turnOffScreen)
   {
@@ -1047,6 +1193,11 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
 // Requirements: x and w must be byte-aligned (multiples of 8 pixels)
 void EInkDisplay::displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const bool turnOffScreen) {
   if (Serial) Serial.printf("[%lu]   Displaying window at (%d,%d) size (%dx%d)\n", millis(), x, y, w, h);
+
+  if (_m5PaperColorMode) {
+    displayBuffer(FAST_REFRESH, turnOffScreen);
+    return;
+  }
 
   // Validate bounds
   if (x + w > displayWidth || y + h > displayHeight) {

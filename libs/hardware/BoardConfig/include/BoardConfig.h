@@ -69,7 +69,7 @@ constexpr BoardProfile M5STACK_PAPER_COLOR = {Board::M5StackPaperColor,
                                               600,
                                               {15, 13, 44, 43, 12, 11, PIN_UNASSIGNED},
                                               {15, 14, 13, 47, PIN_UNASSIGNED, false},
-                                              {1, 1, PIN_UNASSIGNED, PIN_UNASSIGNED, 9, 10, 1},
+                                              {1, 1, PIN_UNASSIGNED, PIN_UNASSIGNED, 10, 9, 1},
                                               PIN_UNASSIGNED,
                                               PIN_UNASSIGNED};
 

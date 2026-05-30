@@ -111,6 +111,7 @@ class EInkDisplay {
   uint8_t _x3InitialFullSyncsRemaining = 0;
   bool _x3ForceFullSyncNext = false;
   uint8_t _x3ForcedConditionPassesNext = 0;
+  bool _m5LastFrameValid = false;
   // Frame buffer (statically allocated)
   uint8_t frameBuffer0[MAX_BUFFER_SIZE];
   uint8_t* frameBuffer;
@@ -136,6 +137,11 @@ class EInkDisplay {
   void waitForRefresh(const char* comment = nullptr);
   void waitWhileBusy(const char* comment = nullptr);
   void initDisplayController();
+  void initM5PaperColorController();
+  void waitM5PaperColorBusy(const char* comment = nullptr);
+  void sendM5PaperColorCommandData(uint8_t command, const uint8_t* data, uint16_t length);
+  void writeM5PaperColorFrame(const uint8_t* buffer);
+  void refreshM5PaperColor();
 
   // Low-level display operations
   void setRamArea(uint16_t x, uint16_t y, uint16_t w, uint16_t h);
