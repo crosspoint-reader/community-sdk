@@ -1,10 +1,55 @@
 #include "SDCardManager.h"
 
 #include <BoardConfig.h>
+#include <SPI.h>
+#include <Wire.h>
 
 namespace {
 constexpr uint8_t SD_CS = BoardConfig::ACTIVE.sd.cs;
 constexpr uint32_t SPI_FQ = 40000000;
+
+bool writeI2CRegister8(const uint8_t addr, const uint8_t reg, const uint8_t value) {
+  Wire.beginTransmission(addr);
+  Wire.write(reg);
+  Wire.write(value);
+  return Wire.endTransmission(true) == 0;
+}
+
+bool updateI2CRegister8(const uint8_t addr, const uint8_t reg, const uint8_t clearMask, const uint8_t setMask) {
+  Wire.beginTransmission(addr);
+  Wire.write(reg);
+  if (Wire.endTransmission(false) != 0) {
+    return false;
+  }
+  if (Wire.requestFrom(addr, static_cast<uint8_t>(1), static_cast<uint8_t>(true)) < 1) {
+    return false;
+  }
+  const uint8_t current = Wire.read();
+  return writeI2CRegister8(addr, reg, static_cast<uint8_t>((current & ~clearMask) | setMask));
+}
+
+void enableM5PaperColorSdPower() {
+#if defined(CROSSPOINT_BOARD_M5STACK_PAPERCOLOR) || defined(BOARD_M5STACK_PAPERCOLOR)
+  constexpr uint8_t PMIC_ADDR = 0x6E;
+  constexpr uint32_t I2C_FREQ = 100000;
+  constexpr uint8_t PMIC_GPIO3 = 1 << 3;
+
+  Wire.begin(3, 2, I2C_FREQ);
+  Wire.setTimeOut(20);
+
+  // M5PaperColor uses M5PM1 GPIO3 as SD-card power enable.
+  // REG 0x16: GPIO function select, 0 = GPIO.
+  // REG 0x10: GPIO direction, 1 = output.
+  // REG 0x13: GPIO output type, 0 = push-pull.
+  // REG 0x11: GPIO output value, 1 = high.
+  writeI2CRegister8(PMIC_ADDR, 0x09, 0x00);
+  updateI2CRegister8(PMIC_ADDR, 0x16, PMIC_GPIO3, 0);
+  updateI2CRegister8(PMIC_ADDR, 0x10, 0, PMIC_GPIO3);
+  updateI2CRegister8(PMIC_ADDR, 0x13, PMIC_GPIO3, 0);
+  updateI2CRegister8(PMIC_ADDR, 0x11, 0, PMIC_GPIO3);
+  delay(100);
+#endif
+}
 }
 
 SDCardManager SDCardManager::instance;
@@ -12,6 +57,14 @@ SDCardManager SDCardManager::instance;
 SDCardManager::SDCardManager() : sd() {}
 
 bool SDCardManager::begin() {
+  if (BoardConfig::isM5StackPaperColor()) {
+    enableM5PaperColorSdPower();
+  }
+
+  if (BoardConfig::ACTIVE.sd.sclk >= 0 && BoardConfig::ACTIVE.sd.mosi >= 0 && BoardConfig::ACTIVE.sd.miso >= 0) {
+    SPI.begin(BoardConfig::ACTIVE.sd.sclk, BoardConfig::ACTIVE.sd.miso, BoardConfig::ACTIVE.sd.mosi, SD_CS);
+  }
+
   if (!sd.begin(SD_CS, SPI_FQ)) {
     if (Serial) Serial.printf("[%lu] [SD] SD card not detected\n", millis());
     initialized = false;

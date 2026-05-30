@@ -291,12 +291,10 @@ void EInkDisplay::begin() {
 #if defined(BOARD_M5STACK_PAPERCOLOR) || defined(CROSSPOINT_BOARD_M5STACK_PAPERCOLOR)
   if (_m5PaperColorMode) {
     auto cfg = M5.config();
+    cfg.clear_display = false;
     M5.begin(cfg);
     M5.Display.setRotation(0);
     M5.Display.setEpdMode(m5gfx::epd_quality);
-    M5.Display.clear(TFT_WHITE);
-    M5.Display.display();
-    M5.Display.waitDisplay();
     if (Serial) Serial.printf("[%lu]   M5 PaperColor display initialized\n", millis());
     isScreenOn = true;
     return;
