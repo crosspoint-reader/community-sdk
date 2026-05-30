@@ -19,6 +19,7 @@ class EInkDisplay {
 
   // Set X3 panel geometry and mode (must be called before begin())
   void setDisplayX3();
+  void setDisplayM5PaperColor();
 
   // Initialize the display hardware and driver
   void begin();
@@ -52,6 +53,9 @@ class EInkDisplay {
   void copyGrayscaleBuffers(const uint8_t* lsbBuffer, const uint8_t* msbBuffer);
   void copyGrayscaleLsbBuffers(const uint8_t* lsbBuffer);
   void copyGrayscaleMsbBuffers(const uint8_t* msbBuffer);
+  enum GrayPlane { GRAY_PLANE_LSB, GRAY_PLANE_MSB };
+  void writeGrayscalePlaneStrip(GrayPlane plane, const uint8_t* rows, uint16_t yStart, uint16_t numRows);
+  bool supportsStripGrayscale() const;
 #ifdef EINK_DISPLAY_SINGLE_BUFFER_MODE
   void cleanupGrayscaleBuffers(const uint8_t* bwBuffer);
 #endif
@@ -65,6 +69,7 @@ class EInkDisplay {
 
   // Hint the X3 policy to run a one-shot full resync on next update.
   void requestResync(uint8_t settlePasses = 0);
+  void skipInitialResync();
 
   // debug function
   void grayscaleRevert();
@@ -96,6 +101,7 @@ class EInkDisplay {
   uint16_t displayWidthBytes = DISPLAY_WIDTH_BYTES;
   uint32_t bufferSize = BUFFER_SIZE;
   bool _x3Mode = false;
+  bool _m5PaperColorMode = false;
   bool _x3RedRamSynced = false;
   struct X3GrayState {
     bool lastBaseWasPartial = false;

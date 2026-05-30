@@ -1,0 +1,13 @@
+{
+  "name": "BoardConfig",
+  "version": "1.0.0",
+  "description": "Compile-time hardware board profiles",
+  "authors": [
+    {
+      "name": "CrossPoint Reader contributors"
+    }
+  ],
+  "dependencies": {},
+  "platforms": "espressif32",
+  "frameworks": ["arduino", "espidf"]
+}

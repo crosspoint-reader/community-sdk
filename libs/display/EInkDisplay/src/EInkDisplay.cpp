@@ -1,5 +1,11 @@
 #include "EInkDisplay.h"
 
+#include <BoardConfig.h>
+
+#if defined(BOARD_M5STACK_PAPERCOLOR) || defined(CROSSPOINT_BOARD_M5STACK_PAPERCOLOR)
+#include <M5Unified.h>
+#endif
+
 #include <cstring>
 #include <fstream>
 #include <vector>
@@ -212,6 +218,7 @@ void EInkDisplay::setDisplayDimensions(uint16_t width, uint16_t height) {
   displayWidthBytes = width / 8;
   bufferSize = displayWidthBytes * height;
   _x3Mode = false;
+  _m5PaperColorMode = false;
 }
 
 void EInkDisplay::setDisplayX3() {
@@ -219,9 +226,22 @@ void EInkDisplay::setDisplayX3() {
   _x3Mode = true;
 }
 
+void EInkDisplay::setDisplayM5PaperColor() {
+  setDisplayDimensions(400, 600);
+  _m5PaperColorMode = true;
+}
+
 void EInkDisplay::requestResync(uint8_t settlePasses) {
   _x3ForceFullSyncNext = _x3Mode;
   _x3ForcedConditionPassesNext = _x3Mode ? settlePasses : 0;
+}
+
+void EInkDisplay::skipInitialResync() {
+  if (!_x3Mode) {
+    return;
+  }
+  _x3InitialFullSyncsRemaining = 0;
+  _x3RedRamSynced = true;
 }
 
 EInkDisplay::EInkDisplay(int8_t sclk, int8_t mosi, int8_t cs, int8_t dc, int8_t rst, int8_t busy)
@@ -243,6 +263,10 @@ EInkDisplay::EInkDisplay(int8_t sclk, int8_t mosi, int8_t cs, int8_t dc, int8_t 
 void EInkDisplay::begin() {
   if (Serial) Serial.printf("[%lu] EInkDisplay: begin() called\n", millis());
 
+  if (BoardConfig::isM5StackPaperColor()) {
+    setDisplayM5PaperColor();
+  }
+
   frameBuffer = frameBuffer0;
 #ifndef EINK_DISPLAY_SINGLE_BUFFER_MODE
   frameBufferActive = frameBuffer1;
@@ -263,6 +287,18 @@ void EInkDisplay::begin() {
 #endif
 
   if (Serial) Serial.printf("[%lu]   Initializing e-ink display driver...\n", millis());
+
+#if defined(BOARD_M5STACK_PAPERCOLOR) || defined(CROSSPOINT_BOARD_M5STACK_PAPERCOLOR)
+  if (_m5PaperColorMode) {
+    auto cfg = M5.config();
+    M5.begin(cfg);
+    M5.Display.setRotation(0);
+    M5.Display.clear(TFT_WHITE);
+    if (Serial) Serial.printf("[%lu]   M5 PaperColor display initialized\n", millis());
+    isScreenOn = true;
+    return;
+  }
+#endif
 
   // Initialize SPI with custom pins
   SPI.begin(_sclk, -1, _mosi, _cs);
@@ -631,6 +667,10 @@ void EInkDisplay::copyGrayscaleLsbBuffers(const uint8_t* lsbBuffer) {
     return;
   }
 
+  if (_m5PaperColorMode) {
+    return;
+  }
+
   if (_x3Mode) {
     // X3 single-pass AA: write LSB plane to old-data RAM.
     uint8_t row[128];
@@ -656,6 +696,10 @@ void EInkDisplay::copyGrayscaleLsbBuffers(const uint8_t* lsbBuffer) {
 
 void EInkDisplay::copyGrayscaleMsbBuffers(const uint8_t* msbBuffer) {
   if (!msbBuffer) {
+    return;
+  }
+
+  if (_m5PaperColorMode) {
     return;
   }
 
@@ -685,6 +729,10 @@ void EInkDisplay::copyGrayscaleMsbBuffers(const uint8_t* msbBuffer) {
 }
 
 void EInkDisplay::copyGrayscaleBuffers(const uint8_t* lsbBuffer, const uint8_t* msbBuffer) {
+  if (_m5PaperColorMode) {
+    return;
+  }
+
   if (_x3Mode) {
     copyGrayscaleLsbBuffers(lsbBuffer);
     copyGrayscaleMsbBuffers(msbBuffer);
@@ -695,6 +743,25 @@ void EInkDisplay::copyGrayscaleBuffers(const uint8_t* lsbBuffer, const uint8_t* 
   writeRamBuffer(CMD_WRITE_RAM_RED, msbBuffer, bufferSize);
 }
 
+void EInkDisplay::writeGrayscalePlaneStrip(GrayPlane plane, const uint8_t* rows, uint16_t yStart, uint16_t numRows) {
+  if (!rows || numRows == 0 || _m5PaperColorMode) {
+    return;
+  }
+
+  if (_x3Mode) {
+    return;
+  }
+
+  const uint8_t ramCmd = (plane == GRAY_PLANE_LSB) ? CMD_WRITE_RAM_BW : CMD_WRITE_RAM_RED;
+  setRamArea(0, yStart, displayWidth, numRows);
+  sendCommand(ramCmd);
+  sendData(rows, static_cast<uint16_t>(static_cast<uint32_t>(numRows) * displayWidthBytes));
+}
+
+bool EInkDisplay::supportsStripGrayscale() const {
+  return !_x3Mode && !_m5PaperColorMode;
+}
+
 #ifdef EINK_DISPLAY_SINGLE_BUFFER_MODE
 /**
  * In single buffer mode, this should be called with the previously written BW buffer
@@ -702,6 +769,11 @@ void EInkDisplay::copyGrayscaleBuffers(const uint8_t* lsbBuffer, const uint8_t* 
  * grayscale display.
  */
 void EInkDisplay::cleanupGrayscaleBuffers(const uint8_t* bwBuffer) {
+  if (_m5PaperColorMode) {
+    inGrayscaleMode = false;
+    return;
+  }
+
   if (_x3Mode) {
     if (!bwBuffer) {
       return;
@@ -738,6 +810,29 @@ void EInkDisplay::cleanupGrayscaleBuffers(const uint8_t* bwBuffer) {
 #endif
 
 void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
+#if defined(BOARD_M5STACK_PAPERCOLOR) || defined(CROSSPOINT_BOARD_M5STACK_PAPERCOLOR)
+  if (_m5PaperColorMode) {
+    if (!frameBuffer) {
+      return;
+    }
+    M5.update();
+    M5.Display.startWrite();
+    for (uint16_t y = 0; y < displayHeight; ++y) {
+      const uint32_t rowOffset = static_cast<uint32_t>(y) * displayWidthBytes;
+      for (uint16_t x = 0; x < displayWidth; ++x) {
+        const bool white = (frameBuffer[rowOffset + (x >> 3)] >> (7 - (x & 7))) & 0x01;
+        M5.Display.drawPixel(x, y, white ? TFT_WHITE : TFT_BLACK);
+      }
+    }
+    M5.Display.endWrite();
+    M5.Display.display();
+    if (turnOffScreen) {
+      deepSleep();
+    }
+    return;
+  }
+#endif
+
   if (!_x3Mode && !isScreenOn && !turnOffScreen)
   {
     // Force half refresh if screen is off (non-X3 only)
@@ -1010,6 +1105,11 @@ void EInkDisplay::displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h, 
 }
 
 void EInkDisplay::displayGrayBuffer(const bool turnOffScreen) {
+  if (_m5PaperColorMode) {
+    displayBuffer(FAST_REFRESH, turnOffScreen);
+    return;
+  }
+
   if (_x3Mode) {
     // X3 AA pipeline: LSB->0x10 + MSB->0x13, trigger 0x12 with X3 LUT bank.
     drawGrayscale = false;
@@ -1097,6 +1197,11 @@ void EInkDisplay::displayGrayBuffer(const bool turnOffScreen) {
 }
 
 void EInkDisplay::refreshDisplay(const RefreshMode mode, const bool turnOffScreen) {
+  if (_m5PaperColorMode) {
+    displayBuffer(mode, turnOffScreen);
+    return;
+  }
+
   if (_x3Mode) {
     displayBuffer(mode, turnOffScreen);
     return;
@@ -1189,6 +1294,11 @@ void EInkDisplay::setCustomLUT(const bool enabled, const unsigned char* lutData)
 
 void EInkDisplay::deepSleep() {
   if (Serial) Serial.printf("[%lu]   Preparing display for deep sleep...\n", millis());
+
+  if (_m5PaperColorMode) {
+    isScreenOn = false;
+    return;
+  }
 
   // First, power down the display properly
   // This shuts down the analog power rails and clock

@@ -1,7 +1,9 @@
 #include "SDCardManager.h"
 
+#include <BoardConfig.h>
+
 namespace {
-constexpr uint8_t SD_CS = 12;
+constexpr uint8_t SD_CS = BoardConfig::ACTIVE.sd.cs;
 constexpr uint32_t SPI_FQ = 40000000;
 }
 

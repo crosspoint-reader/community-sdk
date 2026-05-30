@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <BoardConfig.h>
 
 class InputManager {
  public:
@@ -62,6 +63,11 @@ class InputManager {
    */
   unsigned long getHeldTime() const;
 
+  /**
+   * Returns the time the power button has been held.
+   */
+  unsigned long getPowerButtonHeldTime() const;
+
   // Button indices
   static constexpr uint8_t BTN_BACK = 0;
   static constexpr uint8_t BTN_CONFIRM = 1;
@@ -74,7 +80,7 @@ class InputManager {
   // Pins
   static constexpr int BUTTON_ADC_PIN_1 = 1;
   static constexpr int BUTTON_ADC_PIN_2 = 2;
-  static constexpr int POWER_BUTTON_PIN = 3;
+  static constexpr int POWER_BUTTON_PIN = BoardConfig::ACTIVE.input.power;
 
   // Power button methods
   bool isPowerButtonPressed() const;
@@ -84,6 +90,10 @@ class InputManager {
 
  private:
   int getButtonFromADC(int adcValue, const int ranges[], int numButtons);
+  bool isDigitalPressed(int8_t pin) const;
+  uint8_t getDigitalState() const;
+  void updateConfirmBackHold(unsigned long currentTime);
+  void applyStateChange(uint8_t state, unsigned long currentTime);
 
   uint8_t currentState;
   uint8_t lastState;
@@ -92,6 +102,11 @@ class InputManager {
   unsigned long lastDebounceTime;
   unsigned long buttonPressStart;
   unsigned long buttonPressFinish;
+  unsigned long powerButtonPressStart;
+  unsigned long powerButtonPressFinish;
+  unsigned long confirmBackPressStart;
+  bool confirmBackPhysicalPressed;
+  bool confirmBackLongPressActive;
 
   static constexpr int NUM_BUTTONS_1 = 4;
   static const int ADC_RANGES_1[];
@@ -101,6 +116,7 @@ class InputManager {
 
   static constexpr int ADC_NO_BUTTON = 3900;
   static constexpr unsigned long DEBOUNCE_DELAY = 5;
+  static constexpr unsigned long CONFIRM_BACK_HOLD_MS = 650;
 
   static const char* BUTTON_NAMES[];
 };

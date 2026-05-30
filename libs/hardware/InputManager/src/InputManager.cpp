@@ -25,13 +25,31 @@ InputManager::InputManager()
       releasedEvents(0),
       lastDebounceTime(0),
       buttonPressStart(0),
-      buttonPressFinish(0) {}
+      buttonPressFinish(0),
+      powerButtonPressStart(0),
+      powerButtonPressFinish(0),
+      confirmBackPressStart(0),
+      confirmBackPhysicalPressed(false),
+      confirmBackLongPressActive(false) {}
 
 void InputManager::begin() {
-  pinMode(BUTTON_ADC_PIN_1, INPUT);
-  pinMode(BUTTON_ADC_PIN_2, INPUT);
-  pinMode(POWER_BUTTON_PIN, INPUT_PULLUP);
-  analogSetAttenuation(ADC_11db);
+  if (BoardConfig::ACTIVE.inputStyle == BoardConfig::InputStyle::XteinkAdcLadder) {
+    pinMode(BUTTON_ADC_PIN_1, INPUT);
+    pinMode(BUTTON_ADC_PIN_2, INPUT);
+    pinMode(POWER_BUTTON_PIN, INPUT_PULLUP);
+    analogSetAttenuation(ADC_11db);
+    return;
+  }
+
+  const int8_t pins[] = {BoardConfig::ACTIVE.input.back, BoardConfig::ACTIVE.input.confirm,
+                         BoardConfig::ACTIVE.input.left, BoardConfig::ACTIVE.input.right,
+                         BoardConfig::ACTIVE.input.up,   BoardConfig::ACTIVE.input.down,
+                         BoardConfig::ACTIVE.input.power};
+  for (const int8_t pin : pins) {
+    if (pin >= 0) {
+      pinMode(pin, INPUT_PULLUP);
+    }
+  }
 }
 
 int InputManager::getButtonFromADC(const int adcValue, const int ranges[], const int numButtons) {
@@ -45,6 +63,10 @@ int InputManager::getButtonFromADC(const int adcValue, const int ranges[], const
 }
 
 uint8_t InputManager::getState() {
+  if (BoardConfig::ACTIVE.inputStyle != BoardConfig::InputStyle::XteinkAdcLadder) {
+    return getDigitalState();
+  }
+
   uint8_t state = 0;
 
   // Read GPIO1 buttons
@@ -69,13 +91,100 @@ uint8_t InputManager::getState() {
   return state;
 }
 
+bool InputManager::isDigitalPressed(const int8_t pin) const {
+  return pin >= 0 && digitalRead(pin) == LOW;
+}
+
+uint8_t InputManager::getDigitalState() const {
+  uint8_t state = 0;
+
+  if (BoardConfig::ACTIVE.inputStyle != BoardConfig::InputStyle::DigitalConfirmBackHold) {
+    if (isDigitalPressed(BoardConfig::ACTIVE.input.back)) state |= (1 << BTN_BACK);
+    if (isDigitalPressed(BoardConfig::ACTIVE.input.confirm)) state |= (1 << BTN_CONFIRM);
+  }
+
+  if (isDigitalPressed(BoardConfig::ACTIVE.input.left)) state |= (1 << BTN_LEFT);
+  if (isDigitalPressed(BoardConfig::ACTIVE.input.right)) state |= (1 << BTN_RIGHT);
+  if (isDigitalPressed(BoardConfig::ACTIVE.input.up)) state |= (1 << BTN_UP);
+  if (isDigitalPressed(BoardConfig::ACTIVE.input.down)) state |= (1 << BTN_DOWN);
+  if (isDigitalPressed(BoardConfig::ACTIVE.input.power) &&
+      BoardConfig::ACTIVE.inputStyle != BoardConfig::InputStyle::DigitalConfirmBackHold) {
+    state |= (1 << BTN_POWER);
+  }
+
+  return state;
+}
+
+void InputManager::applyStateChange(const uint8_t state, const unsigned long currentTime) {
+  pressedEvents = state & ~currentState;
+  releasedEvents = currentState & ~state;
+
+  if (pressedEvents > 0 && currentState == 0) {
+    buttonPressStart = currentTime;
+  }
+
+  if (releasedEvents > 0 && state == 0) {
+    buttonPressFinish = currentTime;
+  }
+
+  if (pressedEvents & (1 << BTN_POWER)) {
+    powerButtonPressStart = currentTime;
+  }
+
+  if (releasedEvents & (1 << BTN_POWER)) {
+    powerButtonPressFinish = currentTime;
+  }
+
+  currentState = state;
+}
+
+void InputManager::updateConfirmBackHold(const unsigned long currentTime) {
+  const bool pressed = isDigitalPressed(BoardConfig::ACTIVE.input.confirm);
+  const uint8_t nonSharedState = getDigitalState();
+  bool emitConfirmClick = false;
+
+  if (pressed && !confirmBackPhysicalPressed) {
+    confirmBackPhysicalPressed = true;
+    confirmBackLongPressActive = false;
+    confirmBackPressStart = currentTime;
+  }
+
+  uint8_t nextState = nonSharedState;
+  if (pressed && currentTime - confirmBackPressStart >= CONFIRM_BACK_HOLD_MS) {
+    confirmBackLongPressActive = true;
+    nextState |= (1 << BTN_BACK);
+  }
+
+  if (!pressed && confirmBackPhysicalPressed) {
+    confirmBackPhysicalPressed = false;
+    if (!confirmBackLongPressActive) {
+      emitConfirmClick = true;
+      buttonPressStart = confirmBackPressStart;
+      buttonPressFinish = currentTime;
+    }
+    confirmBackLongPressActive = false;
+  }
+
+  applyStateChange(nextState, currentTime);
+
+  if (emitConfirmClick) {
+    pressedEvents |= (1 << BTN_CONFIRM);
+    releasedEvents |= (1 << BTN_CONFIRM);
+  }
+}
+
 void InputManager::update() {
   const unsigned long currentTime = millis();
-  const uint8_t state = getState();
 
-  // Always clear events first
   pressedEvents = 0;
   releasedEvents = 0;
+
+  if (BoardConfig::ACTIVE.inputStyle == BoardConfig::InputStyle::DigitalConfirmBackHold) {
+    updateConfirmBackHold(currentTime);
+    return;
+  }
+
+  const uint8_t state = getState();
 
   // Debounce
   if (state != lastState) {
@@ -85,21 +194,7 @@ void InputManager::update() {
 
   if ((currentTime - lastDebounceTime) > DEBOUNCE_DELAY) {
     if (state != currentState) {
-      // Calculate pressed and released events
-      pressedEvents = state & ~currentState;
-      releasedEvents = currentState & ~state;
-
-      // If pressing buttons and wasn't before, start recording time
-      if (pressedEvents > 0 && currentState == 0) {
-        buttonPressStart = currentTime;
-      }
-
-      // If releasing a button and no other buttons being pressed, record finish time
-      if (releasedEvents > 0 && state == 0) {
-        buttonPressFinish = currentTime;
-      }
-
-      currentState = state;
+      applyStateChange(state, currentTime);
     }
   }
 }
@@ -131,6 +226,14 @@ unsigned long InputManager::getHeldTime() const {
   }
 
   return buttonPressFinish - buttonPressStart;
+}
+
+unsigned long InputManager::getPowerButtonHeldTime() const {
+  if (isPressed(BTN_POWER)) {
+    return millis() - powerButtonPressStart;
+  }
+
+  return powerButtonPressFinish - powerButtonPressStart;
 }
 
 const char* InputManager::getButtonName(const uint8_t buttonIndex) {
