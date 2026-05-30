@@ -113,6 +113,7 @@ class EInkDisplay {
   uint8_t _x3ForcedConditionPassesNext = 0;
   bool _m5LastFrameValid = false;
   bool _m5PanelPowerOn = false;
+  uint8_t _m5FastRefreshesSinceFullPanel = 0;
   uint8_t* _m5PreviousFrame = nullptr;
   // Frame buffer (statically allocated)
   uint8_t frameBuffer0[MAX_BUFFER_SIZE];

@@ -12,12 +12,18 @@ namespace {
 constexpr uint16_t M5_PAPERCOLOR_PANEL_WIDTH = 400;
 constexpr uint16_t M5_PAPERCOLOR_PANEL_HEIGHT = 600;
 #ifndef M5_PAPERCOLOR_REFRESH_CUTOFF_MS
-#define M5_PAPERCOLOR_REFRESH_CUTOFF_MS 240
+#define M5_PAPERCOLOR_REFRESH_CUTOFF_MS 340
+#endif
+#ifndef M5_PAPERCOLOR_BUSY_SETTLE_MS
+#define M5_PAPERCOLOR_BUSY_SETTLE_MS 20
+#endif
+#ifndef M5_PAPERCOLOR_FAST_CLEAN_INTERVAL
+#define M5_PAPERCOLOR_FAST_CLEAN_INTERVAL 6
 #endif
 constexpr uint8_t M5_PAPERCOLOR_DARK_DISPLAY_CTRL = 0x0F;
 constexpr uint32_t M5_PAPERCOLOR_PANEL_AREA =
     static_cast<uint32_t>(M5_PAPERCOLOR_PANEL_WIDTH) * M5_PAPERCOLOR_PANEL_HEIGHT;
-constexpr uint32_t M5_PAPERCOLOR_PARTIAL_AREA_LIMIT = M5_PAPERCOLOR_PANEL_AREA / 3;
+constexpr uint32_t M5_PAPERCOLOR_PARTIAL_AREA_LIMIT = M5_PAPERCOLOR_PANEL_AREA / 4;
 
 #if defined(BOARD_M5STACK_PAPERCOLOR) || defined(CROSSPOINT_BOARD_M5STACK_PAPERCOLOR)
 constexpr uint8_t M5PM1_ADDR = 0x6E;
@@ -364,6 +370,7 @@ void EInkDisplay::begin() {
   _x3ForcedConditionPassesNext = 0;
   _m5LastFrameValid = false;
   _m5PanelPowerOn = false;
+  _m5FastRefreshesSinceFullPanel = 0;
   _x3GrayState = {};
 #ifdef EINK_DISPLAY_SINGLE_BUFFER_MODE
   if (Serial) Serial.printf("[%lu]   Static frame buffer (%lu bytes)\n", millis(), bufferSize);
@@ -545,7 +552,7 @@ void EInkDisplay::waitM5PaperColorBusy(const char* comment) {
         break;
       }
     } while (digitalRead(_busy) == LOW);
-    delay(200);
+    delay(M5_PAPERCOLOR_BUSY_SETTLE_MS);
   }
   if (comment && Serial) {
     Serial.printf("[%lu]   M5 PaperColor wait complete: %s (%lu ms)\n", millis(), comment, millis() - start);
@@ -655,7 +662,6 @@ void EInkDisplay::powerOnM5PaperColor() {
   beginM5PaperColorTransaction();
   sendM5PaperColorCommand(0x04);
   waitM5PaperColorBusy("power on");
-  delay(200);
   endM5PaperColorTransaction();
   _m5PanelPowerOn = true;
   isScreenOn = true;
@@ -670,7 +676,6 @@ void EInkDisplay::powerOffM5PaperColor() {
   sendM5PaperColorCommand(0x02);
   sendM5PaperColorData(0x00);
   waitM5PaperColorBusy("power off");
-  delay(200);
   endM5PaperColorTransaction();
   _m5PanelPowerOn = false;
   isScreenOn = false;
@@ -684,7 +689,6 @@ void EInkDisplay::interruptM5PaperColorRefresh() {
   resetDisplay();
   initM5PaperColorController();
   _m5PanelPowerOn = false;
-  powerOnM5PaperColor();
 }
 
 bool EInkDisplay::getM5PaperColorDirtyWindow(uint16_t* x, uint16_t* y, uint16_t* w, uint16_t* h) const {
@@ -746,8 +750,9 @@ bool EInkDisplay::getM5PaperColorDirtyWindow(uint16_t* x, uint16_t* y, uint16_t*
 }
 
 void EInkDisplay::refreshM5PaperColor(RefreshMode mode, uint16_t dirtyX, uint16_t dirtyY, uint16_t dirtyW, uint16_t dirtyH) {
-  const bool interrupted = mode != FULL_REFRESH;
-
+  (void)mode;
+  // The ED2208 full OTP waveform is the slow multi-color flash. PaperColor uses
+  // full-panel interrupted refreshes as its cleanup path instead.
   powerOnM5PaperColor();
 
   beginM5PaperColorTransaction();
@@ -756,30 +761,19 @@ void EInkDisplay::refreshM5PaperColor(RefreshMode mode, uint16_t dirtyX, uint16_
   sendM5PaperColorData(0x1F);
   sendM5PaperColorData(0x17);
   sendM5PaperColorData(0x27);
-  delay(200);
 
-  if (interrupted) {
-    if (Serial) {
-      Serial.printf("[%lu]   M5 PaperColor dirty window x=%u y=%u w=%u h=%u\n", millis(), dirtyX, dirtyY, dirtyW, dirtyH);
-    }
-    setM5PaperColorPartialWindow(dirtyX, dirtyY, dirtyW, dirtyH);
+  if (Serial) {
+    Serial.printf("[%lu]   M5 PaperColor dirty window x=%u y=%u w=%u h=%u\n", millis(), dirtyX, dirtyY, dirtyW, dirtyH);
   }
+  setM5PaperColorPartialWindow(dirtyX, dirtyY, dirtyW, dirtyH);
 
   sendM5PaperColorCommand(0x50);
   sendM5PaperColorData(M5_PAPERCOLOR_DARK_DISPLAY_CTRL);
 
   sendM5PaperColorCommand(0x12);
   sendM5PaperColorData(0x00);
-  if (interrupted) {
-    endM5PaperColorTransaction();
-    interruptM5PaperColorRefresh();
-    return;
-  }
-
-  waitM5PaperColorBusy("refresh");
   endM5PaperColorTransaction();
-
-  powerOffM5PaperColor();
+  interruptM5PaperColorRefresh();
 }
 
 void EInkDisplay::waitWhileBusy(const char* comment) {
@@ -1221,7 +1215,8 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
       return;
     }
 #endif
-    if (mode != FULL_REFRESH && _m5LastFrameValid) {
+    if (mode != FULL_REFRESH && _m5LastFrameValid &&
+        _m5FastRefreshesSinceFullPanel < M5_PAPERCOLOR_FAST_CLEAN_INTERVAL) {
       const uint32_t dirtyArea = static_cast<uint32_t>(dirtyW) * dirtyH;
       if (dirtyArea <= M5_PAPERCOLOR_PARTIAL_AREA_LIMIT) {
         refreshX = dirtyX;
@@ -1233,11 +1228,19 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
                       millis(),
                       static_cast<unsigned long>(dirtyArea));
       }
+    } else if (mode != FULL_REFRESH && _m5LastFrameValid && Serial) {
+      Serial.printf("[%lu]   M5 PaperColor fast cleanup; using full-panel interrupted refresh\n", millis());
     }
     // ED2208 command 0x10 expects a coherent full-frame RAM upload. Limit the
     // physical drive by changing only the refresh window, not the RAM stream.
     writeM5PaperColorFrame(frameBuffer);
     refreshM5PaperColor(mode, refreshX, refreshY, refreshW, refreshH);
+    if (refreshX == 0 && refreshY == 0 &&
+        refreshW == M5_PAPERCOLOR_PANEL_WIDTH && refreshH == M5_PAPERCOLOR_PANEL_HEIGHT) {
+      _m5FastRefreshesSinceFullPanel = 0;
+    } else if (_m5FastRefreshesSinceFullPanel < 0xFF) {
+      ++_m5FastRefreshesSinceFullPanel;
+    }
 #ifndef EINK_DISPLAY_SINGLE_BUFFER_MODE
     if (frameBufferActive) {
       memcpy(frameBufferActive, frameBuffer, bufferSize);
