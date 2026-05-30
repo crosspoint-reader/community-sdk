@@ -1201,22 +1201,23 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
     uint16_t dirtyY = 0;
     uint16_t dirtyW = M5_PAPERCOLOR_PANEL_WIDTH;
     uint16_t dirtyH = M5_PAPERCOLOR_PANEL_HEIGHT;
-    if (!getM5PaperColorDirtyWindow(&dirtyX, &dirtyY, &dirtyW, &dirtyH)) {
+    const bool forceFullPanelRefresh = mode == FULL_REFRESH;
+    if (!forceFullPanelRefresh && !getM5PaperColorDirtyWindow(&dirtyX, &dirtyY, &dirtyW, &dirtyH)) {
       if (turnOffScreen) {
         deepSleep();
       }
       return;
     }
 #ifndef EINK_DISPLAY_SINGLE_BUFFER_MODE
-    if (_m5LastFrameValid && frameBufferActive && memcmp(frameBufferActive, frameBuffer, bufferSize) == 0) {
+    if (!forceFullPanelRefresh && _m5LastFrameValid && frameBufferActive &&
+        memcmp(frameBufferActive, frameBuffer, bufferSize) == 0) {
       if (turnOffScreen) {
         deepSleep();
       }
       return;
     }
 #endif
-    if (mode != FULL_REFRESH && _m5LastFrameValid &&
-        _m5FastRefreshesSinceFullPanel < M5_PAPERCOLOR_FAST_CLEAN_INTERVAL) {
+    if (!forceFullPanelRefresh && _m5LastFrameValid && _m5FastRefreshesSinceFullPanel < M5_PAPERCOLOR_FAST_CLEAN_INTERVAL) {
       const uint32_t dirtyArea = static_cast<uint32_t>(dirtyW) * dirtyH;
       if (dirtyArea <= M5_PAPERCOLOR_PARTIAL_AREA_LIMIT) {
         refreshX = dirtyX;
@@ -1228,8 +1229,10 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
                       millis(),
                       static_cast<unsigned long>(dirtyArea));
       }
-    } else if (mode != FULL_REFRESH && _m5LastFrameValid && Serial) {
+    } else if (!forceFullPanelRefresh && _m5LastFrameValid && Serial) {
       Serial.printf("[%lu]   M5 PaperColor fast cleanup; using full-panel interrupted refresh\n", millis());
+    } else if (forceFullPanelRefresh && Serial) {
+      Serial.printf("[%lu]   M5 PaperColor forced full-panel interrupted refresh\n", millis());
     }
     // ED2208 command 0x10 expects a coherent full-frame RAM upload. Limit the
     // physical drive by changing only the refresh window, not the RAM stream.
