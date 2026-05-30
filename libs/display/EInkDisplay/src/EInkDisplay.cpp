@@ -11,6 +11,13 @@
 namespace {
 constexpr uint16_t M5_PAPERCOLOR_PANEL_WIDTH = 400;
 constexpr uint16_t M5_PAPERCOLOR_PANEL_HEIGHT = 600;
+#ifndef M5_PAPERCOLOR_REFRESH_CUTOFF_MS
+#define M5_PAPERCOLOR_REFRESH_CUTOFF_MS 240
+#endif
+constexpr uint8_t M5_PAPERCOLOR_DARK_DISPLAY_CTRL = 0x0F;
+constexpr uint32_t M5_PAPERCOLOR_PANEL_AREA =
+    static_cast<uint32_t>(M5_PAPERCOLOR_PANEL_WIDTH) * M5_PAPERCOLOR_PANEL_HEIGHT;
+constexpr uint32_t M5_PAPERCOLOR_PARTIAL_AREA_LIMIT = M5_PAPERCOLOR_PANEL_AREA / 3;
 
 #if defined(BOARD_M5STACK_PAPERCOLOR) || defined(CROSSPOINT_BOARD_M5STACK_PAPERCOLOR)
 constexpr uint8_t M5PM1_ADDR = 0x6E;
@@ -324,6 +331,8 @@ EInkDisplay::EInkDisplay(int8_t sclk, int8_t mosi, int8_t cs, int8_t dc, int8_t 
       frameBufferActive(nullptr),
 #endif
       _m5LastFrameValid(false),
+      _m5PanelPowerOn(false),
+      _m5PreviousFrame(nullptr),
       customLutActive(false) {
   if (Serial) Serial.printf("[%lu] EInkDisplay: Constructor called\n", millis());
   if (Serial) Serial.printf("[%lu]   SCLK=%d, MOSI=%d, CS=%d, DC=%d, RST=%d, BUSY=%d\n", millis(), sclk, mosi, cs, dc, rst, busy);
@@ -343,11 +352,18 @@ void EInkDisplay::begin() {
 
   // Initialize to white
   memset(frameBuffer0, 0xFF, bufferSize);
+  if (_m5PaperColorMode && _m5PreviousFrame == nullptr) {
+    _m5PreviousFrame = static_cast<uint8_t*>(malloc(bufferSize));
+  }
+  if (_m5PreviousFrame != nullptr) {
+    memset(_m5PreviousFrame, 0xFF, bufferSize);
+  }
   _x3RedRamSynced = false;
   _x3InitialFullSyncsRemaining = _x3Mode ? 2 : 0;
   _x3ForceFullSyncNext = false;
   _x3ForcedConditionPassesNext = 0;
   _m5LastFrameValid = false;
+  _m5PanelPowerOn = false;
   _x3GrayState = {};
 #ifdef EINK_DISPLAY_SINGLE_BUFFER_MODE
   if (Serial) Serial.printf("[%lu]   Static frame buffer (%lu bytes)\n", millis(), bufferSize);
@@ -547,7 +563,7 @@ void EInkDisplay::initM5PaperColorController() {
       0x03, 4, 0x03, 0x54, 0x00, 0x44,
       0x60, 2, 0x02, 0x00,
       0x30, 1, 0x08,
-      0x50, 1, 0x3F,
+      0x50, 1, M5_PAPERCOLOR_DARK_DISPLAY_CTRL,
       0xE3, 1, 0x2F,
       0x84, 1, 0x01,
   };
@@ -572,8 +588,11 @@ void EInkDisplay::initM5PaperColorController() {
 }
 
 void EInkDisplay::writeM5PaperColorFrame(const uint8_t* buffer) {
-  static constexpr uint8_t EPD_BLACK = 0x0;
-  static constexpr uint8_t EPD_WHITE = 0x1;
+  // Interrupted PaperColor refreshes settle into a usable dark UI with this
+  // polarity: logical white becomes physical black, logical black becomes
+  // physical white.
+  static constexpr uint8_t EPD_WHITE = 0x0;
+  static constexpr uint8_t EPD_BLACK = 0x1;
   uint8_t packedRow[M5_PAPERCOLOR_PANEL_WIDTH / 2];
 
   beginM5PaperColorTransaction();
@@ -603,12 +622,135 @@ void EInkDisplay::writeM5PaperColorFrame(const uint8_t* buffer) {
   endM5PaperColorTransaction();
 }
 
-void EInkDisplay::refreshM5PaperColor() {
+void EInkDisplay::setM5PaperColorPartialWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h) {
+  if (w == 0 || h == 0) {
+    return;
+  }
+
+  const uint16_t xEnd = static_cast<uint16_t>(x + w - 1);
+  const uint16_t yEnd = static_cast<uint16_t>(y + h);
+  const uint8_t window[9] = {
+      static_cast<uint8_t>(x >> 8),
+      static_cast<uint8_t>(x & 0xFF),
+      static_cast<uint8_t>(xEnd >> 8),
+      static_cast<uint8_t>(xEnd & 0xFF),
+      static_cast<uint8_t>(y >> 8),
+      static_cast<uint8_t>(y & 0xFF),
+      static_cast<uint8_t>(yEnd >> 8),
+      static_cast<uint8_t>(yEnd & 0xFF),
+      0x01,
+  };
+
+  sendM5PaperColorCommand(0x83);
+  for (uint8_t value : window) {
+    sendM5PaperColorData(value);
+  }
+}
+
+void EInkDisplay::powerOnM5PaperColor() {
+  if (_m5PanelPowerOn) {
+    return;
+  }
+
   beginM5PaperColorTransaction();
   sendM5PaperColorCommand(0x04);
   waitM5PaperColorBusy("power on");
   delay(200);
+  endM5PaperColorTransaction();
+  _m5PanelPowerOn = true;
+  isScreenOn = true;
+}
 
+void EInkDisplay::powerOffM5PaperColor() {
+  if (!_m5PanelPowerOn) {
+    return;
+  }
+
+  beginM5PaperColorTransaction();
+  sendM5PaperColorCommand(0x02);
+  sendM5PaperColorData(0x00);
+  waitM5PaperColorBusy("power off");
+  delay(200);
+  endM5PaperColorTransaction();
+  _m5PanelPowerOn = false;
+  isScreenOn = false;
+}
+
+void EInkDisplay::interruptM5PaperColorRefresh() {
+  delay(M5_PAPERCOLOR_REFRESH_CUTOFF_MS);
+  if (Serial) {
+    Serial.printf("[%lu]   M5 PaperColor interrupted refresh after %u ms\n", millis(), M5_PAPERCOLOR_REFRESH_CUTOFF_MS);
+  }
+  resetDisplay();
+  initM5PaperColorController();
+  _m5PanelPowerOn = false;
+  powerOnM5PaperColor();
+}
+
+bool EInkDisplay::getM5PaperColorDirtyWindow(uint16_t* x, uint16_t* y, uint16_t* w, uint16_t* h) const {
+  if (_m5PreviousFrame == nullptr || !_m5LastFrameValid) {
+    *x = 0;
+    *y = 0;
+    *w = M5_PAPERCOLOR_PANEL_WIDTH;
+    *h = M5_PAPERCOLOR_PANEL_HEIGHT;
+    return true;
+  }
+
+  uint16_t minPanelX = M5_PAPERCOLOR_PANEL_WIDTH;
+  uint16_t minPanelY = M5_PAPERCOLOR_PANEL_HEIGHT;
+  uint16_t maxPanelX = 0;
+  uint16_t maxPanelY = 0;
+  bool any = false;
+
+  for (uint16_t logicalY = 0; logicalY < displayHeight; ++logicalY) {
+    const uint32_t rowOffset = static_cast<uint32_t>(logicalY) * displayWidthBytes;
+    for (uint16_t byteX = 0; byteX < displayWidthBytes; ++byteX) {
+      if (frameBuffer[rowOffset + byteX] == _m5PreviousFrame[rowOffset + byteX]) {
+        continue;
+      }
+      for (uint8_t bit = 0; bit < 8; ++bit) {
+        const uint16_t logicalX = static_cast<uint16_t>(byteX * 8 + bit);
+        if (logicalX >= displayWidth) {
+          break;
+        }
+        const uint8_t mask = static_cast<uint8_t>(0x80 >> bit);
+        if ((frameBuffer[rowOffset + byteX] & mask) == (_m5PreviousFrame[rowOffset + byteX] & mask)) {
+          continue;
+        }
+        const uint16_t panelX = static_cast<uint16_t>(displayHeight - 1 - logicalY);
+        const uint16_t panelY = logicalX;
+        minPanelX = std::min(minPanelX, panelX);
+        maxPanelX = std::max(maxPanelX, panelX);
+        minPanelY = std::min(minPanelY, panelY);
+        maxPanelY = std::max(maxPanelY, panelY);
+        any = true;
+      }
+    }
+  }
+
+  if (!any) {
+    return false;
+  }
+
+  constexpr uint16_t PAD = 8;
+  minPanelX = static_cast<uint16_t>((minPanelX > PAD) ? minPanelX - PAD : 0);
+  minPanelY = static_cast<uint16_t>((minPanelY > PAD) ? minPanelY - PAD : 0);
+  maxPanelX = std::min<uint16_t>(M5_PAPERCOLOR_PANEL_WIDTH - 1, maxPanelX + PAD);
+  maxPanelY = std::min<uint16_t>(M5_PAPERCOLOR_PANEL_HEIGHT - 1, maxPanelY + PAD);
+
+  *x = minPanelX;
+  *y = minPanelY;
+  *w = static_cast<uint16_t>(maxPanelX - minPanelX + 1);
+  *h = static_cast<uint16_t>(maxPanelY - minPanelY + 1);
+  return true;
+}
+
+void EInkDisplay::refreshM5PaperColor(RefreshMode mode, uint16_t dirtyX, uint16_t dirtyY, uint16_t dirtyW, uint16_t dirtyH) {
+  const bool interrupted = mode != FULL_REFRESH;
+
+  powerOnM5PaperColor();
+
+  beginM5PaperColorTransaction();
   sendM5PaperColorCommand(0x06);
   sendM5PaperColorData(0x6F);
   sendM5PaperColorData(0x1F);
@@ -616,15 +758,28 @@ void EInkDisplay::refreshM5PaperColor() {
   sendM5PaperColorData(0x27);
   delay(200);
 
+  if (interrupted) {
+    if (Serial) {
+      Serial.printf("[%lu]   M5 PaperColor dirty window x=%u y=%u w=%u h=%u\n", millis(), dirtyX, dirtyY, dirtyW, dirtyH);
+    }
+    setM5PaperColorPartialWindow(dirtyX, dirtyY, dirtyW, dirtyH);
+  }
+
+  sendM5PaperColorCommand(0x50);
+  sendM5PaperColorData(M5_PAPERCOLOR_DARK_DISPLAY_CTRL);
+
   sendM5PaperColorCommand(0x12);
   sendM5PaperColorData(0x00);
-  waitM5PaperColorBusy("refresh");
+  if (interrupted) {
+    endM5PaperColorTransaction();
+    interruptM5PaperColorRefresh();
+    return;
+  }
 
-  sendM5PaperColorCommand(0x02);
-  sendM5PaperColorData(0x00);
-  waitM5PaperColorBusy("power off");
-  delay(200);
+  waitM5PaperColorBusy("refresh");
   endM5PaperColorTransaction();
+
+  powerOffM5PaperColor();
 }
 
 void EInkDisplay::waitWhileBusy(const char* comment) {
@@ -1040,9 +1195,22 @@ void EInkDisplay::cleanupGrayscaleBuffers(const uint8_t* bwBuffer) {
 #endif
 
 void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
-  (void)mode;
   if (_m5PaperColorMode) {
     if (!frameBuffer) {
+      return;
+    }
+    uint16_t refreshX = 0;
+    uint16_t refreshY = 0;
+    uint16_t refreshW = M5_PAPERCOLOR_PANEL_WIDTH;
+    uint16_t refreshH = M5_PAPERCOLOR_PANEL_HEIGHT;
+    uint16_t dirtyX = 0;
+    uint16_t dirtyY = 0;
+    uint16_t dirtyW = M5_PAPERCOLOR_PANEL_WIDTH;
+    uint16_t dirtyH = M5_PAPERCOLOR_PANEL_HEIGHT;
+    if (!getM5PaperColorDirtyWindow(&dirtyX, &dirtyY, &dirtyW, &dirtyH)) {
+      if (turnOffScreen) {
+        deepSleep();
+      }
       return;
     }
 #ifndef EINK_DISPLAY_SINGLE_BUFFER_MODE
@@ -1053,14 +1221,32 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
       return;
     }
 #endif
+    if (mode != FULL_REFRESH && _m5LastFrameValid) {
+      const uint32_t dirtyArea = static_cast<uint32_t>(dirtyW) * dirtyH;
+      if (dirtyArea <= M5_PAPERCOLOR_PARTIAL_AREA_LIMIT) {
+        refreshX = dirtyX;
+        refreshY = dirtyY;
+        refreshW = dirtyW;
+        refreshH = dirtyH;
+      } else if (Serial) {
+        Serial.printf("[%lu]   M5 PaperColor dirty area %lu too large; using full-panel fast refresh\n",
+                      millis(),
+                      static_cast<unsigned long>(dirtyArea));
+      }
+    }
+    // ED2208 command 0x10 expects a coherent full-frame RAM upload. Limit the
+    // physical drive by changing only the refresh window, not the RAM stream.
     writeM5PaperColorFrame(frameBuffer);
-    refreshM5PaperColor();
+    refreshM5PaperColor(mode, refreshX, refreshY, refreshW, refreshH);
 #ifndef EINK_DISPLAY_SINGLE_BUFFER_MODE
     if (frameBufferActive) {
       memcpy(frameBufferActive, frameBuffer, bufferSize);
-      _m5LastFrameValid = true;
     }
 #endif
+    if (_m5PreviousFrame != nullptr) {
+      memcpy(_m5PreviousFrame, frameBuffer, bufferSize);
+    }
+    _m5LastFrameValid = true;
     if (turnOffScreen) {
       deepSleep();
     }
@@ -1535,6 +1721,7 @@ void EInkDisplay::deepSleep() {
   if (Serial) Serial.printf("[%lu]   Preparing display for deep sleep...\n", millis());
 
   if (_m5PaperColorMode) {
+    powerOffM5PaperColor();
     isScreenOn = false;
     return;
   }
