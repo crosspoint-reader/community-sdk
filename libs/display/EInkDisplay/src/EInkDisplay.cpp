@@ -345,6 +345,10 @@ void EInkDisplay::begin() {
     pinMode(_dc, OUTPUT);
     pinMode(_rst, OUTPUT);
     pinMode(_busy, INPUT_PULLUP);
+    if (BoardConfig::ACTIVE.sd.cs >= 0) {
+      pinMode(BoardConfig::ACTIVE.sd.cs, OUTPUT);
+      digitalWrite(BoardConfig::ACTIVE.sd.cs, HIGH);
+    }
     digitalWrite(_cs, HIGH);
     digitalWrite(_dc, HIGH);
     resetDisplay();
@@ -451,28 +455,52 @@ void EInkDisplay::sendData(const uint8_t* data, uint16_t length) {
   SPI.endTransaction();
 }
 
-void EInkDisplay::sendM5PaperColorCommandData(uint8_t command, const uint8_t* data, uint16_t length) {
-  SPI.beginTransaction(spiSettings);
-  digitalWrite(_dc, LOW);
-  digitalWrite(_cs, LOW);
-  SPI.transfer(command);
-  if (data != nullptr && length > 0) {
-    digitalWrite(_dc, HIGH);
-    SPI.writeBytes(data, length);
+void EInkDisplay::beginM5PaperColorTransaction() {
+  if (BoardConfig::ACTIVE.sd.cs >= 0) {
+    digitalWrite(BoardConfig::ACTIVE.sd.cs, HIGH);
   }
+  SPI.beginTransaction(spiSettings);
+  digitalWrite(_cs, LOW);
+}
+
+void EInkDisplay::endM5PaperColorTransaction() {
   digitalWrite(_cs, HIGH);
   SPI.endTransaction();
 }
 
+void EInkDisplay::sendM5PaperColorCommand(uint8_t command) {
+  digitalWrite(_dc, LOW);
+  SPI.transfer(command);
+  digitalWrite(_dc, HIGH);
+}
+
+void EInkDisplay::sendM5PaperColorData(uint8_t data) {
+  digitalWrite(_dc, HIGH);
+  SPI.transfer(data);
+}
+
+void EInkDisplay::sendM5PaperColorCommandData(uint8_t command, const uint8_t* data, uint16_t length) {
+  beginM5PaperColorTransaction();
+  sendM5PaperColorCommand(command);
+  if (data != nullptr && length > 0) {
+    digitalWrite(_dc, HIGH);
+    SPI.writeBytes(data, length);
+  }
+  endM5PaperColorTransaction();
+}
+
 void EInkDisplay::waitM5PaperColorBusy(const char* comment) {
   const unsigned long start = millis();
-  while (digitalRead(_busy) == LOW) {
-    delay(10);
-    if (millis() - start > 30000) {
-      break;
-    }
+  const bool busy = digitalRead(_busy) == LOW;
+  if (busy) {
+    do {
+      delay(10);
+      if (millis() - start > 30000) {
+        break;
+      }
+    } while (digitalRead(_busy) == LOW);
+    delay(200);
   }
-  delay(200);
   if (comment && Serial) {
     Serial.printf("[%lu]   M5 PaperColor wait complete: %s (%lu ms)\n", millis(), comment, millis() - start);
   }
@@ -494,20 +522,23 @@ void EInkDisplay::initM5PaperColorController() {
       0x84, 1, 0x01,
   };
 
+  beginM5PaperColorTransaction();
   for (size_t i = 0; i < sizeof(initCommands);) {
     const uint8_t command = initCommands[i++];
     const uint8_t length = initCommands[i++];
     waitM5PaperColorBusy();
-    sendM5PaperColorCommandData(command, &initCommands[i], length);
-    i += length;
+    sendM5PaperColorCommand(command);
+    for (uint8_t j = 0; j < length; ++j) {
+      sendM5PaperColorData(initCommands[i++]);
+    }
   }
-
-  const uint8_t resolution[] = {static_cast<uint8_t>((M5_PAPERCOLOR_PANEL_WIDTH >> 8) & 0xFF),
-                                static_cast<uint8_t>(M5_PAPERCOLOR_PANEL_WIDTH & 0xFF),
-                                static_cast<uint8_t>((M5_PAPERCOLOR_PANEL_HEIGHT >> 8) & 0xFF),
-                                static_cast<uint8_t>(M5_PAPERCOLOR_PANEL_HEIGHT & 0xFF)};
   waitM5PaperColorBusy();
-  sendM5PaperColorCommandData(0x61, resolution, sizeof(resolution));
+  sendM5PaperColorCommand(0x61);
+  sendM5PaperColorData(static_cast<uint8_t>((M5_PAPERCOLOR_PANEL_WIDTH >> 8) & 0xFF));
+  sendM5PaperColorData(static_cast<uint8_t>(M5_PAPERCOLOR_PANEL_WIDTH & 0xFF));
+  sendM5PaperColorData(static_cast<uint8_t>((M5_PAPERCOLOR_PANEL_HEIGHT >> 8) & 0xFF));
+  sendM5PaperColorData(static_cast<uint8_t>(M5_PAPERCOLOR_PANEL_HEIGHT & 0xFF));
+  endM5PaperColorTransaction();
 }
 
 void EInkDisplay::writeM5PaperColorFrame(const uint8_t* buffer) {
@@ -515,10 +546,8 @@ void EInkDisplay::writeM5PaperColorFrame(const uint8_t* buffer) {
   static constexpr uint8_t EPD_WHITE = 0x1;
   uint8_t packedRow[M5_PAPERCOLOR_PANEL_WIDTH / 2];
 
-  SPI.beginTransaction(spiSettings);
-  digitalWrite(_dc, LOW);
-  digitalWrite(_cs, LOW);
-  SPI.transfer(0x10);
+  beginM5PaperColorTransaction();
+  sendM5PaperColorCommand(0x10);
   digitalWrite(_dc, HIGH);
 
   for (uint16_t panelY = 0; panelY < M5_PAPERCOLOR_PANEL_HEIGHT; ++panelY) {
@@ -541,25 +570,35 @@ void EInkDisplay::writeM5PaperColorFrame(const uint8_t* buffer) {
     SPI.writeBytes(packedRow, sizeof(packedRow));
   }
 
-  digitalWrite(_cs, HIGH);
-  SPI.endTransaction();
+  endM5PaperColorTransaction();
 }
 
 void EInkDisplay::refreshM5PaperColor() {
-  sendM5PaperColorCommandData(0x04, nullptr, 0);
+  beginM5PaperColorTransaction();
+  sendM5PaperColorCommand(0x04);
+  endM5PaperColorTransaction();
   waitM5PaperColorBusy("power on");
   delay(200);
 
-  const uint8_t booster[] = {0x6F, 0x1F, 0x17, 0x27};
-  sendM5PaperColorCommandData(0x06, booster, sizeof(booster));
+  beginM5PaperColorTransaction();
+  sendM5PaperColorCommand(0x06);
+  sendM5PaperColorData(0x6F);
+  sendM5PaperColorData(0x1F);
+  sendM5PaperColorData(0x17);
+  sendM5PaperColorData(0x27);
+  endM5PaperColorTransaction();
   delay(200);
 
-  const uint8_t refreshArg = 0x00;
-  sendM5PaperColorCommandData(0x12, &refreshArg, 1);
+  beginM5PaperColorTransaction();
+  sendM5PaperColorCommand(0x12);
+  sendM5PaperColorData(0x00);
+  endM5PaperColorTransaction();
   waitM5PaperColorBusy("refresh");
 
-  const uint8_t powerOffArg = 0x00;
-  sendM5PaperColorCommandData(0x02, &powerOffArg, 1);
+  beginM5PaperColorTransaction();
+  sendM5PaperColorCommand(0x02);
+  sendM5PaperColorData(0x00);
+  endM5PaperColorTransaction();
   waitM5PaperColorBusy("power off");
   delay(200);
 }

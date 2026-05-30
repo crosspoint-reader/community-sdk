@@ -139,6 +139,10 @@ class EInkDisplay {
   void initDisplayController();
   void initM5PaperColorController();
   void waitM5PaperColorBusy(const char* comment = nullptr);
+  void beginM5PaperColorTransaction();
+  void endM5PaperColorTransaction();
+  void sendM5PaperColorCommand(uint8_t command);
+  void sendM5PaperColorData(uint8_t data);
   void sendM5PaperColorCommandData(uint8_t command, const uint8_t* data, uint16_t length);
   void writeM5PaperColorFrame(const uint8_t* buffer);
   void refreshM5PaperColor();
