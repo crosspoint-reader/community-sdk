@@ -9,6 +9,9 @@
 #include <vector>
 
 namespace {
+constexpr uint16_t M5_PAPERCOLOR_PANEL_WIDTH = 400;
+constexpr uint16_t M5_PAPERCOLOR_PANEL_HEIGHT = 600;
+
 #if defined(BOARD_M5STACK_PAPERCOLOR) || defined(CROSSPOINT_BOARD_M5STACK_PAPERCOLOR)
 constexpr uint8_t M5PM1_ADDR = 0x6E;
 constexpr uint8_t M5PM1_LDO_ENABLE_REG = 0x06;
@@ -336,8 +339,8 @@ void EInkDisplay::begin() {
 
   if (_m5PaperColorMode) {
     enableM5PaperColorEpdPower();
-    SPI.begin(_sclk, -1, _mosi, _cs);
-    spiSettings = SPISettings(10000000, MSBFIRST, SPI_MODE0);
+    SPI.begin(_sclk, BoardConfig::ACTIVE.sd.miso, _mosi, _cs);
+    spiSettings = SPISettings(4000000, MSBFIRST, SPI_MODE0);
     pinMode(_cs, OUTPUT);
     pinMode(_dc, OUTPUT);
     pinMode(_rst, OUTPUT);
@@ -499,10 +502,10 @@ void EInkDisplay::initM5PaperColorController() {
     i += length;
   }
 
-  const uint8_t resolution[] = {static_cast<uint8_t>((displayWidth >> 8) & 0xFF),
-                                static_cast<uint8_t>(displayWidth & 0xFF),
-                                static_cast<uint8_t>((displayHeight >> 8) & 0xFF),
-                                static_cast<uint8_t>(displayHeight & 0xFF)};
+  const uint8_t resolution[] = {static_cast<uint8_t>((M5_PAPERCOLOR_PANEL_WIDTH >> 8) & 0xFF),
+                                static_cast<uint8_t>(M5_PAPERCOLOR_PANEL_WIDTH & 0xFF),
+                                static_cast<uint8_t>((M5_PAPERCOLOR_PANEL_HEIGHT >> 8) & 0xFF),
+                                static_cast<uint8_t>(M5_PAPERCOLOR_PANEL_HEIGHT & 0xFF)};
   waitM5PaperColorBusy();
   sendM5PaperColorCommandData(0x61, resolution, sizeof(resolution));
 }
@@ -510,7 +513,7 @@ void EInkDisplay::initM5PaperColorController() {
 void EInkDisplay::writeM5PaperColorFrame(const uint8_t* buffer) {
   static constexpr uint8_t EPD_BLACK = 0x0;
   static constexpr uint8_t EPD_WHITE = 0x1;
-  uint8_t packedRow[300];
+  uint8_t packedRow[M5_PAPERCOLOR_PANEL_WIDTH / 2];
 
   SPI.beginTransaction(spiSettings);
   digitalWrite(_dc, LOW);
@@ -518,16 +521,24 @@ void EInkDisplay::writeM5PaperColorFrame(const uint8_t* buffer) {
   SPI.transfer(0x10);
   digitalWrite(_dc, HIGH);
 
-  for (uint16_t y = 0; y < displayHeight; ++y) {
-    const uint32_t rowOffset = static_cast<uint32_t>(y) * displayWidthBytes;
-    for (uint16_t x = 0; x < displayWidth; x += 2) {
-      const bool leftWhite = (buffer[rowOffset + (x >> 3)] >> (7 - (x & 7))) & 0x01;
-      const bool rightWhite = (buffer[rowOffset + ((x + 1) >> 3)] >> (7 - ((x + 1) & 7))) & 0x01;
+  for (uint16_t panelY = 0; panelY < M5_PAPERCOLOR_PANEL_HEIGHT; ++panelY) {
+    for (uint16_t panelX = 0; panelX < M5_PAPERCOLOR_PANEL_WIDTH; panelX += 2) {
+      const uint16_t leftLogicalX = panelY;
+      const uint16_t leftLogicalY = static_cast<uint16_t>(displayHeight - 1 - panelX);
+      const uint32_t leftOffset = static_cast<uint32_t>(leftLogicalY) * displayWidthBytes;
+      const bool leftWhite = (buffer[leftOffset + (leftLogicalX >> 3)] >> (7 - (leftLogicalX & 7))) & 0x01;
+
+      const uint16_t rightPanelX = static_cast<uint16_t>(panelX + 1);
+      const uint16_t rightLogicalX = panelY;
+      const uint16_t rightLogicalY = static_cast<uint16_t>(displayHeight - 1 - rightPanelX);
+      const uint32_t rightOffset = static_cast<uint32_t>(rightLogicalY) * displayWidthBytes;
+      const bool rightWhite = (buffer[rightOffset + (rightLogicalX >> 3)] >> (7 - (rightLogicalX & 7))) & 0x01;
+
       const uint8_t left = leftWhite ? EPD_WHITE : EPD_BLACK;
       const uint8_t right = rightWhite ? EPD_WHITE : EPD_BLACK;
-      packedRow[x >> 1] = static_cast<uint8_t>((left << 4) | right);
+      packedRow[panelX >> 1] = static_cast<uint8_t>((left << 4) | right);
     }
-    SPI.writeBytes(packedRow, displayWidth / 2);
+    SPI.writeBytes(packedRow, sizeof(packedRow));
   }
 
   digitalWrite(_cs, HIGH);
