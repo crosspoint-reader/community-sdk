@@ -14,8 +14,16 @@ constexpr uint16_t M5_PAPERCOLOR_PANEL_HEIGHT = 600;
 
 #if defined(BOARD_M5STACK_PAPERCOLOR) || defined(CROSSPOINT_BOARD_M5STACK_PAPERCOLOR)
 constexpr uint8_t M5PM1_ADDR = 0x6E;
-constexpr uint8_t M5PM1_LDO_ENABLE_REG = 0x06;
+constexpr uint8_t M5PM1_POWER_CONFIG_REG = 0x06;
 constexpr uint8_t M5PM1_WATCHDOG_REG = 0x09;
+constexpr uint8_t M5PM1_GPIO_MODE_REG = 0x10;
+constexpr uint8_t M5PM1_GPIO_OUT_REG = 0x11;
+constexpr uint8_t M5PM1_GPIO_DRV_REG = 0x13;
+constexpr uint8_t M5PM1_GPIO_FUNC0_REG = 0x16;
+constexpr uint8_t M5PM1_POWER_CHARGE_EN = 1 << 0;
+constexpr uint8_t M5PM1_POWER_LDO_EN = 1 << 2;
+constexpr uint8_t M5PM1_POWER_BOOST_EN = 1 << 3;
+constexpr uint8_t M5PM1_GPIO0 = 1 << 0;
 constexpr int M5_INTERNAL_I2C_SDA = 3;
 constexpr int M5_INTERNAL_I2C_SCL = 2;
 constexpr uint32_t M5_INTERNAL_I2C_FREQ = 100000;
@@ -40,15 +48,28 @@ bool m5Pm1ReadReg(uint8_t reg, uint8_t* value) {
   return true;
 }
 
+void m5Pm1UpdateReg(uint8_t reg, uint8_t clearMask, uint8_t setMask) {
+  uint8_t value = 0;
+  if (m5Pm1ReadReg(reg, &value)) {
+    m5Pm1WriteReg(reg, static_cast<uint8_t>((value & ~clearMask) | setMask));
+  }
+}
+
 void enableM5PaperColorEpdPower() {
   Wire.begin(M5_INTERNAL_I2C_SDA, M5_INTERNAL_I2C_SCL, M5_INTERNAL_I2C_FREQ);
   Wire.setTimeOut(4);
   m5Pm1WriteReg(M5PM1_WATCHDOG_REG, 0x00);
 
-  uint8_t ldoEnable = 0;
-  if (m5Pm1ReadReg(M5PM1_LDO_ENABLE_REG, &ldoEnable)) {
-    m5Pm1WriteReg(M5PM1_LDO_ENABLE_REG, ldoEnable | 0x04);
-  }
+  m5Pm1UpdateReg(M5PM1_POWER_CONFIG_REG,
+                 0,
+                 M5PM1_POWER_CHARGE_EN | M5PM1_POWER_LDO_EN | M5PM1_POWER_BOOST_EN);
+
+  // M5PaperColor routes panel power enable through M5PM1 GPIO0 (EPD_EN).
+  m5Pm1UpdateReg(M5PM1_GPIO_FUNC0_REG, M5PM1_GPIO0, 0);
+  m5Pm1UpdateReg(M5PM1_GPIO_MODE_REG, 0, M5PM1_GPIO0);
+  m5Pm1UpdateReg(M5PM1_GPIO_DRV_REG, M5PM1_GPIO0, 0);
+  m5Pm1UpdateReg(M5PM1_GPIO_OUT_REG, 0, M5PM1_GPIO0);
+  delay(100);
 }
 #else
 void enableM5PaperColorEpdPower() {}
@@ -491,7 +512,16 @@ void EInkDisplay::sendM5PaperColorCommandData(uint8_t command, const uint8_t* da
 
 void EInkDisplay::waitM5PaperColorBusy(const char* comment) {
   const unsigned long start = millis();
-  const bool busy = digitalRead(_busy) == LOW;
+  bool busy = digitalRead(_busy) == LOW;
+  if (!busy) {
+    while (millis() - start < 100) {
+      if (digitalRead(_busy) == LOW) {
+        busy = true;
+        break;
+      }
+      delay(1);
+    }
+  }
   if (busy) {
     do {
       delay(10);
@@ -576,31 +606,25 @@ void EInkDisplay::writeM5PaperColorFrame(const uint8_t* buffer) {
 void EInkDisplay::refreshM5PaperColor() {
   beginM5PaperColorTransaction();
   sendM5PaperColorCommand(0x04);
-  endM5PaperColorTransaction();
   waitM5PaperColorBusy("power on");
   delay(200);
 
-  beginM5PaperColorTransaction();
   sendM5PaperColorCommand(0x06);
   sendM5PaperColorData(0x6F);
   sendM5PaperColorData(0x1F);
   sendM5PaperColorData(0x17);
   sendM5PaperColorData(0x27);
-  endM5PaperColorTransaction();
   delay(200);
 
-  beginM5PaperColorTransaction();
   sendM5PaperColorCommand(0x12);
   sendM5PaperColorData(0x00);
-  endM5PaperColorTransaction();
   waitM5PaperColorBusy("refresh");
 
-  beginM5PaperColorTransaction();
   sendM5PaperColorCommand(0x02);
   sendM5PaperColorData(0x00);
-  endM5PaperColorTransaction();
   waitM5PaperColorBusy("power off");
   delay(200);
+  endM5PaperColorTransaction();
 }
 
 void EInkDisplay::waitWhileBusy(const char* comment) {
