@@ -1141,23 +1141,38 @@ void EInkDisplay::writeGrayscalePlaneStrip(GrayPlane plane, const uint8_t *rows,
   if (_x3Mode) {
     // X3 (UC81xx) has no SSD1677-style RAM windowing, but PTL partial-window is
     // the equivalent: window to this band, then write its rows to the DTM plane
-    // (LSB -> 0x10, MSB -> 0x13). Rows are emitted bottom-first within the band
-    // to reproduce the whole-plane Y-flip the non-streaming path applies (X3
-    // scans gates upward). Window Y is logical, matching the post-condition
-    // pass's full-screen PTL usage; band placement is verified on-device.
+    // (LSB -> 0x10, MSB -> 0x13).
+    //
+    // PTL Y is in the controller's gate space, NOT logical rows: the UC81xx
+    // knows nothing about logical orientation — the full-frame path gets the
+    // image upright purely by Y-flipping the whole buffer in software before a
+    // gate-order write (sendPlaneX3: "scans gates upward (UD=1), first byte ->
+    // bottom-left"). So logical row y lives at gate (H-1-y), and a logical band
+    // [yStart..yEndLogical] occupies gates [H-1-yEndLogical .. H-1-yStart]. We
+    // window that flipped gate range and emit the band's rows bottom-first
+    // (highest logical row first), so the first byte lands at gate
+    // (H-1-yEndLogical) holding logical yEndLogical, matching the whole-plane
+    // write exactly. The old code windowed the logical range [yStart..yEnd],
+    // which only coincided with gate space at the vertical center and
+    // mirror-scattered every other band — banding both text AA and images
+    // (issue #2190). The post-condition pass's full-screen PTL ([0..H-1]) hid
+    // this because that window is its own gate-space mirror.
+    //
     // Each band's data is its own CS-low burst so the SPI bus is free for
     // SD-card font reads between bands.
     const uint8_t ramCmd = (plane == GRAY_PLANE_LSB) ? CMD_X3_DTM1 : CMD_X3_DTM2;
     const uint16_t xEnd = displayWidth - 1;
-    const uint16_t yEnd = yStart + numRows - 1;
+    const uint16_t yEndLogical = yStart + numRows - 1;
+    const uint16_t gateYStart = (displayHeight - 1) - yEndLogical;
+    const uint16_t gateYEnd = (displayHeight - 1) - yStart;
     const uint8_t win[9] = {0,
                             0,
                             static_cast<uint8_t>(xEnd >> 8),
                             static_cast<uint8_t>(xEnd & 0xFF),
-                            static_cast<uint8_t>(yStart >> 8),
-                            static_cast<uint8_t>(yStart & 0xFF),
-                            static_cast<uint8_t>(yEnd >> 8),
-                            static_cast<uint8_t>(yEnd & 0xFF),
+                            static_cast<uint8_t>(gateYStart >> 8),
+                            static_cast<uint8_t>(gateYStart & 0xFF),
+                            static_cast<uint8_t>(gateYEnd >> 8),
+                            static_cast<uint8_t>(gateYEnd & 0xFF),
                             0x01};
     sendCommand(CMD_X3_PARTIAL_IN);
     sendCommandDataX3(CMD_X3_PARTIAL_WINDOW, win, 9);
