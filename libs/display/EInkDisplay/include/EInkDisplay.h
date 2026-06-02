@@ -21,6 +21,10 @@ class EInkDisplay {
   void setDisplayX3();
   void setDisplayM5PaperColor();
 
+  // M5 PaperColor: make the next refresh run the OTP waveform to completion
+  // instead of aborting it at the interrupt cutoff. One-shot; cleared after use.
+  void requestCompleteWaveformNextRefresh() { _m5CompleteNextRefresh = true; }
+
   // Initialize the display hardware and driver
   void begin();
 
@@ -113,6 +117,7 @@ class EInkDisplay {
   uint8_t _x3ForcedConditionPassesNext = 0;
   bool _m5LastFrameValid = false;
   bool _m5PanelPowerOn = false;
+  bool _m5CompleteNextRefresh = false;
   uint8_t _m5FastRefreshesSinceFullPanel = 0;
   uint8_t* _m5PreviousFrame = nullptr;
   // Frame buffer (statically allocated)

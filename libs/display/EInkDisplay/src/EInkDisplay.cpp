@@ -752,7 +752,10 @@ bool EInkDisplay::getM5PaperColorDirtyWindow(uint16_t* x, uint16_t* y, uint16_t*
 void EInkDisplay::refreshM5PaperColor(RefreshMode mode, uint16_t dirtyX, uint16_t dirtyY, uint16_t dirtyW, uint16_t dirtyH) {
   (void)mode;
   // The ED2208 full OTP waveform is the slow multi-color flash. PaperColor uses
-  // full-panel interrupted refreshes as its cleanup path instead.
+  // full-panel interrupted refreshes as its cleanup path instead. The chord can
+  // request a one-shot complete waveform (no interrupt) to fully clear/unstick.
+  const bool completeWaveform = _m5CompleteNextRefresh;
+  _m5CompleteNextRefresh = false;
   powerOnM5PaperColor();
 
   beginM5PaperColorTransaction();
@@ -768,12 +771,26 @@ void EInkDisplay::refreshM5PaperColor(RefreshMode mode, uint16_t dirtyX, uint16_
   setM5PaperColorPartialWindow(dirtyX, dirtyY, dirtyW, dirtyH);
 
   sendM5PaperColorCommand(0x50);
-  sendM5PaperColorData(M5_PAPERCOLOR_DARK_DISPLAY_CTRL);
+  // Complete (chord) refresh uses the vendor VCOM/CDI (0x3F) for full contrast;
+  // the fast interrupt path keeps the dark-hack value.
+  sendM5PaperColorData(completeWaveform ? 0x3F : M5_PAPERCOLOR_DARK_DISPLAY_CTRL);
 
   sendM5PaperColorCommand(0x12);
   sendM5PaperColorData(0x00);
   endM5PaperColorTransaction();
-  interruptM5PaperColorRefresh();
+
+  if (completeWaveform) {
+    // Wait for the full OTP waveform to finish instead of aborting at the cutoff.
+    waitM5PaperColorBusy("M5 PaperColor complete refresh");
+    beginM5PaperColorTransaction();
+    sendM5PaperColorCommand(0x02);  // POWER_OFF
+    sendM5PaperColorData(0x00);
+    waitM5PaperColorBusy("M5 PaperColor power off");
+    endM5PaperColorTransaction();
+    _m5PanelPowerOn = false;
+  } else {
+    interruptM5PaperColorRefresh();
+  }
 }
 
 void EInkDisplay::waitWhileBusy(const char* comment) {
