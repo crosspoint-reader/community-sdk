@@ -1093,10 +1093,18 @@ void EInkDisplay::displayGrayscaleBase(RefreshMode fallback,
   // full-syncs pending, explicit resync), display normally first and let the
   // bank fire as a pure settle of the just-displayed frame instead.
   if (inGrayscaleMode) {
+    // X3 grayscaleRevert scrubs the panel to white and leaves BOTH DTM planes
+    // all-white with _x3RedRamSynced set, so DTM1 matches the displayed state
+    // and the differential below is valid by construction (white-baseline,
+    // the same pattern the full sync uses).
     grayscaleRevert();
   }
-  const bool cleanBaseNeeded =
-      !_x3RedRamSynced || _x3ForceFullSyncNext || _x3InitialFullSyncsRemaining > 0;
+  // _x3GrayState.lsbValid means grayscale planes were written over DTM1/DTM2
+  // since the last display — the controller RAM no longer holds the displayed
+  // BW frame even though _x3RedRamSynced may still read true, so the
+  // differential would mis-drive; take the clean fallback path instead.
+  const bool cleanBaseNeeded = !_x3RedRamSynced || _x3GrayState.lsbValid ||
+                               _x3ForceFullSyncNext || _x3InitialFullSyncsRemaining > 0;
   if (cleanBaseNeeded) {
     displayBuffer(fallback, /*turnOffScreen=*/false);
     loadLutBankX3WithCdi(0xA9, 0x07, lut_x3_vcom_aa_pre_bw_mid,
@@ -1136,6 +1144,14 @@ void EInkDisplay::preconditionGrayscale(uint16_t x, uint16_t y, uint16_t w,
   // gate H-1-y, see writeGrayscalePlaneStrip); X is byte-aligned outward
   // since PTL horizontal resolution is 8 pixels.
   if (w == 0 || h == 0 || x >= displayWidth || y >= displayHeight) {
+    return;
+  }
+  // The settle is only meaningful (and only safe) when both DTM planes hold
+  // the displayed BW frame. Skip when grayscale planes have been written over
+  // them (lsbValid), a grayscale refresh left the RAM unsynced, or the gray
+  // bank is still loaded — firing the mid bank's strong BW/WB drives against
+  // gray-coded state pairs would corrupt the region.
+  if (inGrayscaleMode || !_x3RedRamSynced || _x3GrayState.lsbValid) {
     return;
   }
   const uint16_t xEndLogical = static_cast<uint16_t>(
