@@ -1081,6 +1081,42 @@ void EInkDisplay::grayscaleRevert() {
   setCustomLUT(false);
 }
 
+void EInkDisplay::displayGrayscaleBase(RefreshMode fallback,
+                                       const bool turnOffScreen) {
+  if (!_x3Mode) {
+    displayBuffer(fallback, turnOffScreen);
+    return;
+  }
+  // OEM V5.6.33 grayscale base update (see displayGrayscaleBase in the
+  // header). DTM1 must hold the previously displayed frame for the
+  // differential to be valid; when it does not (post-AA unsynced, boot
+  // full-syncs pending, explicit resync), display normally first and let the
+  // bank fire as a pure settle of the just-displayed frame instead.
+  if (inGrayscaleMode) {
+    grayscaleRevert();
+  }
+  const bool cleanBaseNeeded =
+      !_x3RedRamSynced || _x3ForceFullSyncNext || _x3InitialFullSyncsRemaining > 0;
+  if (cleanBaseNeeded) {
+    displayBuffer(fallback, /*turnOffScreen=*/false);
+    loadLutBankX3WithCdi(0xA9, 0x07, lut_x3_vcom_aa_pre_bw_mid,
+                         lut_x3_ww_aa_pre_bw_mid, lut_x3_bw_aa_pre_bw_mid,
+                         lut_x3_wb_aa_pre_bw_mid, lut_x3_bb_aa_pre_bw_mid);
+    triggerRefreshX3(turnOffScreen, "(graybase)");
+    return;
+  }
+  sendPlaneX3(CMD_X3_DTM2, frameBuffer, false);
+  loadLutBankX3WithCdi(0xA9, 0x07, lut_x3_vcom_aa_pre_bw_mid,
+                       lut_x3_ww_aa_pre_bw_mid, lut_x3_bw_aa_pre_bw_mid,
+                       lut_x3_wb_aa_pre_bw_mid, lut_x3_bb_aa_pre_bw_mid);
+  triggerRefreshX3(turnOffScreen, "(graybase)");
+  // Keep the invariant that DTM1 mirrors the displayed frame; the grayscale
+  // plane writes that normally follow overwrite both planes anyway.
+  sendPlaneX3(CMD_X3_DTM1, frameBuffer, false);
+  sendCommand(CMD_X3_DATA_STOP);
+  _x3RedRamSynced = true;
+}
+
 void EInkDisplay::preconditionGrayscale() {
   preconditionGrayscale(0, 0, displayWidth, displayHeight);
 }

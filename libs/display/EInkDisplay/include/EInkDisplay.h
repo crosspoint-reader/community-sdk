@@ -67,6 +67,18 @@ class EInkDisplay {
   void preconditionGrayscale();
   void preconditionGrayscale(uint16_t x, uint16_t y, uint16_t w, uint16_t h);
 
+  // Display the framebuffer as the base frame for a grayscale overlay that
+  // follows. On X3 this is the OEM grayscale pipeline's base update: the new
+  // frame goes to DTM2 and the "AA-pre-BW(mid)" bank fires as a differential
+  // against the old frame in DTM1 (strong drives on changed pixels, gentle
+  // reinforcement on unchanged ones), leaving the panel in the calibrated
+  // state the gray nudge bank expects. On X4 (or when the X3 controller state
+  // cannot support a clean differential) it falls back to a plain
+  // displayBuffer(fallback) — on X3 followed by the settle flavor of the same
+  // bank. Callers should write the grayscale planes and call
+  // displayGrayBuffer() immediately after.
+  void displayGrayscaleBase(RefreshMode fallback = HALF_REFRESH, bool turnOffScreen = false);
+
   // Stream one horizontal band of a grayscale plane straight to controller RAM
   // so the caller never holds a full plane buffer in MCU heap (the heap win
   // behind tiled grayscale). `plane` selects LSB/MSB RAM; `rows` points at
