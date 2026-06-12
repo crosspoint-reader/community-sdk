@@ -53,6 +53,20 @@ class EInkDisplay {
   void copyGrayscaleLsbBuffers(const uint8_t* lsbBuffer);
   void copyGrayscaleMsbBuffers(const uint8_t* msbBuffer);
 
+  // X3 grayscale preconditioning ("AA-pre-BW(mid)" in OEM V5.6.33): fires a
+  // gentle full-frame settle refresh that leaves pixels receptive to the weak
+  // grayscale waveform. Call AFTER the BW base frame is displayed and BEFORE
+  // the grayscale planes are written (DTM1/DTM2 must still hold the displayed
+  // BW frame — true right after displayBuffer's post-refresh DTM1 sync). The
+  // OEM firmware runs this pass before every grayscale refresh; without it,
+  // a strong base refresh sets particles too firmly for the gray nudge to
+  // move. The rect overload windows the pass to the gray region in physical
+  // panel coordinates via PTL, exactly like the OEM loader; the no-arg
+  // overload settles the full frame. No-op on X4 (its 12-frame grayscale LUT
+  // does not need it).
+  void preconditionGrayscale();
+  void preconditionGrayscale(uint16_t x, uint16_t y, uint16_t w, uint16_t h);
+
   // Stream one horizontal band of a grayscale plane straight to controller RAM
   // so the caller never holds a full plane buffer in MCU heap (the heap win
   // behind tiled grayscale). `plane` selects LSB/MSB RAM; `rows` points at
