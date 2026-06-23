@@ -1072,6 +1072,10 @@ void EInkDisplay::grayscaleRevert() {
                          lut_x3_bw_half, lut_x3_wb_half, lut_x3_bb_half);
     triggerRefreshX3(/*turnOffScreen=*/false, "(revert)");
     _x3RedRamSynced = true;
+    // Both DTM planes now hold a BW-coded frame (all-white), not grayscale
+    // planes. Clear lsbValid to match, or it stays true forever and forces
+    // displayGrayscaleBase() down the cleanBaseNeeded path every page.
+    _x3GrayState.lsbValid = false;
     return;
   }
 
@@ -1373,6 +1377,11 @@ void EInkDisplay::cleanupGrayscaleBuffers(const uint8_t *bwBuffer) {
       memcpy(rowB, rowTmp, displayWidthBytes);
     }
 
+    // Both planes now hold the rebased BW frame, not grayscale planes, so the
+    // next displayGrayscaleBase() can take the differential happy path. This is
+    // the per-page cleanup the tiled AA reader path runs, so leaving lsbValid
+    // true here is what pins cleanBaseNeeded on in steady state.
+    _x3GrayState.lsbValid = false;
     _x3RedRamSynced = true;
     _x3ForceFullSyncNext = false;
     _x3ForcedConditionPassesNext = 0;
@@ -1537,6 +1546,13 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
     // Sync DTM1 ("old" RAM) with non-inverted current frame for next fast diff.
     sendPlaneX3(CMD_X3_DTM1, frameBuffer, false);
     sendCommand(CMD_X3_DATA_STOP); // commit DTM1 — no refresh follows
+    // A completed BW refresh leaves both DTM planes holding a BW frame, not
+    // grayscale planes, so the next displayGrayscaleBase() can take the
+    // differential happy path. Clear lsbValid to reflect that — otherwise it
+    // stays true after any grayscale page and forces the clean-base fallback
+    // forever (e.g. the periodic full-refresh path that calls displayBuffer()
+    // directly).
+    _x3GrayState.lsbValid = false;
     _x3RedRamSynced = true;
 
     // The first differential after a full garbles on X3: the controller's post-full state corrupts
