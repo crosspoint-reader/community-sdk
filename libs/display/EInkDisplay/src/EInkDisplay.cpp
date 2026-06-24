@@ -1,5 +1,6 @@
 #include "EInkDisplay.h"
 
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <vector>
@@ -132,6 +133,39 @@ const unsigned char lut_grayscale_revert[] PROGMEM = {
     0x00, 0x00, 0x00, 0x00, 0x00, // G7: A=0 B=0 C=0 D=0 RP=0
     0x00, 0x00, 0x00, 0x00, 0x00, // G8: A=0 B=0 C=0 D=0 RP=0
     0x00, 0x00, 0x00, 0x00, 0x00, // G9: A=0 B=0 C=0 D=0 RP=0
+
+    // Frame rate
+    0x8F, 0x8F, 0x8F, 0x8F, 0x8F,
+
+    // Voltages (VGH, VSH1, VSH2, VSL, VCOM)
+    0x17, 0x41, 0xA8, 0x32, 0x30,
+
+    // Reserved
+    0x00, 0x00};
+
+const unsigned char lut_grayscale_dark[] PROGMEM = {
+    // 00 black/white (No Change / Float)
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    // 01 light gray (Inverted Group 1: 01 <-> 10 from 0x54) -> 0xA8
+    0xA8, 0xA8, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    // 10 gray (Inverted Group 2: 01 <-> 10 from 0xAA) -> 0x55
+    0x55, 0x50, 0x54, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    // 11 dark gray (Inverted Group 3: 01 <-> 10 from 0xA2) -> 0x51
+    0x51, 0x11, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    // L4 (VCOM)
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+
+    // TP/RP groups (global timing) - Same as light mode
+    0x01, 0x01, 0x01, 0x01, 0x00,  // G0: A=1 B=1 C=1 D=1 RP=0
+    0x01, 0x01, 0x01, 0x01, 0x00,  // G1: A=1 B=1 C=1 D=1 RP=0
+    0x01, 0x01, 0x01, 0x01, 0x00,  // G2: A=0 B=0 C=0 D=0 RP=0
+    0x00, 0x00, 0x00, 0x00, 0x00,  // G3: A=0 B=0 C=0 D=0 RP=0
+    0x00, 0x00, 0x00, 0x00, 0x00,  // G4: A=0 B=0 C=0 D=0 RP=0
+    0x00, 0x00, 0x00, 0x00, 0x00,  // G5: A=0 B=0 C=0 D=0 RP=0
+    0x00, 0x00, 0x00, 0x00, 0x00,  // G6: A=0 B=0 C=0 D=0 RP=0
+    0x00, 0x00, 0x00, 0x00, 0x00,  // G7: A=0 B=0 C=0 D=0 RP=0
+    0x00, 0x00, 0x00, 0x00, 0x00,  // G8: A=0 B=0 C=0 D=0 RP=0
+    0x00, 0x00, 0x00, 0x00, 0x00,  // G9: A=0 B=0 C=0 D=0 RP=0
 
     // Frame rate
     0x8F, 0x8F, 0x8F, 0x8F, 0x8F,
@@ -1473,9 +1507,18 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
       sendPlaneX3(CMD_X3_DTM2, frameBuffer, false);
     } else {
       // Fast differential: turbo LUTs, DTM1 retains previous frame.
-      loadLutBankX3WithCdi(0x29, 0x07, lut_x3_vcom_fast, lut_x3_ww_fast,
-                           lut_x3_bw_fast, lut_x3_wb_fast, lut_x3_bb_fast);
-      sendPlaneX3(CMD_X3_DTM2, frameBuffer, false);
+      // DARK_REDRIVE on X3: use normal LUTs instead of fast LUTs, and write
+      // inverted frame to DTM1 so all pixels appear changed and get re-driven.
+      if (mode == DARK_REDRIVE) {
+        loadLutBankX3WithCdi(0x29, 0x07, lut_x3_vcom_normal, lut_x3_ww_normal,
+                             lut_x3_bw_normal, lut_x3_wb_normal, lut_x3_bb_normal);
+        sendPlaneX3(CMD_X3_DTM1, frameBuffer, true);  // inverted to DTM1
+        sendPlaneX3(CMD_X3_DTM2, frameBuffer, false); // normal to DTM2
+      } else {
+        loadLutBankX3WithCdi(0x29, 0x07, lut_x3_vcom_fast, lut_x3_ww_fast,
+                             lut_x3_bw_fast, lut_x3_wb_fast, lut_x3_bb_fast);
+        sendPlaneX3(CMD_X3_DTM2, frameBuffer, false);
+      }
     }
 
     // Note: this branch re-issues POWER_ON when doFullSync is true even if
@@ -1578,22 +1621,52 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
     return;
   }
 
+  // DARK_REDRIVE: Invert framebuffer → RED RAM, restore → BW RAM, then fast-refresh.
+  // Forces all pixels to appear "changed" to the controller, re-driving them with the
+  // fast waveform. Prevents dark-mode ghosting without the visible flash of HALF_REFRESH.
+  if (mode == DARK_REDRIVE) {
+    setRamArea(0, 0, displayWidth, displayHeight);
+
+    // In-place invert for RED RAM — controller sees every pixel as different.
+    for (uint32_t i = 0; i < bufferSize; i++) {
+      frameBuffer[i] = static_cast<uint8_t>(~frameBuffer[i]);
+    }
+    writeRamBuffer(CMD_WRITE_RAM_RED, frameBuffer, bufferSize);
+
+    // Restore original framebuffer for BW RAM.
+    for (uint32_t i = 0; i < bufferSize; i++) {
+      frameBuffer[i] = static_cast<uint8_t>(~frameBuffer[i]);
+    }
+    writeRamBuffer(CMD_WRITE_RAM_BW, frameBuffer, bufferSize);
+
+#ifndef EINK_DISPLAY_SINGLE_BUFFER_MODE
+    swapBuffers();
+#endif
+
+    // Refresh using the fast waveform (same LUT as FAST_REFRESH).
+    refreshDisplay(FAST_REFRESH, turnOffScreen);
+
+#ifdef EINK_DISPLAY_SINGLE_BUFFER_MODE
+    // Re-sync RED RAM with current frame for next fast refresh.
+    setRamArea(0, 0, displayWidth, displayHeight);
+    writeRamBuffer(CMD_WRITE_RAM_RED, frameBuffer, bufferSize);
+#endif
+    return;
+  }
+
   // Set up full screen RAM area
   setRamArea(0, 0, displayWidth, displayHeight);
 
-  if (mode != FAST_REFRESH) {
-    // For full refresh, write to both buffers before refresh
+  if (mode == FAST_REFRESH) {
+    // For fast refresh, write to BW buffer only. RED RAM contains the previous frame.
     writeRamBuffer(CMD_WRITE_RAM_BW, frameBuffer, bufferSize);
-    writeRamBuffer(CMD_WRITE_RAM_RED, frameBuffer, bufferSize);
-  } else {
-    // For fast refresh, write to BW buffer only
-    writeRamBuffer(CMD_WRITE_RAM_BW, frameBuffer, bufferSize);
-    // In single buffer mode, the RED RAM should already contain the previous
-    // frame In dual buffer mode, we write back frameBufferActive which is the
-    // last frame
 #ifndef EINK_DISPLAY_SINGLE_BUFFER_MODE
     writeRamBuffer(CMD_WRITE_RAM_RED, frameBufferActive, bufferSize);
 #endif
+  } else {
+    // For full/half refresh, write to both buffers before refresh.
+    writeRamBuffer(CMD_WRITE_RAM_BW, frameBuffer, bufferSize);
+    writeRamBuffer(CMD_WRITE_RAM_RED, frameBuffer, bufferSize);
   }
 
 #ifndef EINK_DISPLAY_SINGLE_BUFFER_MODE
@@ -1709,10 +1782,101 @@ void EInkDisplay::displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
   // Post-refresh: Sync RED RAM with current window (for next fast refresh)
   setRamArea(x, y, w, h);
   writeRamBuffer(CMD_WRITE_RAM_RED, windowBuffer.data(), windowBufferSize);
+#else
+  // Keep the software "previous frame" buffer coherent with what the panel
+  // now shows inside this window. Otherwise repeated window updates diff
+  // against an older frame and accumulate visible ghosting.
+  for (uint16_t row = 0; row < h; row++) {
+    const uint16_t dstY = y + row;
+    const uint16_t dstOffset = dstY * displayWidthBytes + (x / 8);
+    memcpy(&frameBufferActive[dstOffset], &windowBuffer[row * windowWidthBytes], windowWidthBytes);
+  }
 #endif
 
   if (Serial)
     Serial.printf("[%lu]   Window display complete\n", millis());
+}
+
+void EInkDisplay::displayWindowDarkRedrive(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const bool turnOffScreen) {
+  if (Serial) Serial.printf("[%lu]   Dark redrive window at (%d,%d) size (%dx%d)\n", millis(), x, y, w, h);
+
+  // Validate empty window
+  if (w == 0 || h == 0) {
+    if (Serial) Serial.printf("[%lu]   ERROR: Window dimensions cannot be zero!\n", millis());
+    return;
+  }
+
+  if (x + w > displayWidth || y + h > displayHeight) {
+    if (Serial) Serial.printf("[%lu]   ERROR: Window bounds exceed display dimensions!\n", millis());
+    return;
+  }
+
+  if (x % 8 != 0 || w % 8 != 0) {
+    if (Serial) Serial.printf("[%lu]   ERROR: Window x and width must be byte-aligned (multiples of 8)!\n", millis());
+    return;
+  }
+
+  if (!frameBuffer) {
+    if (Serial) Serial.printf("[%lu]   ERROR: Frame buffer not allocated!\n", millis());
+    return;
+  }
+
+  if (_x3Mode) {
+    // X3 route through displayBuffer with DARK_REDRIVE mode
+    displayBuffer(DARK_REDRIVE, turnOffScreen);
+    return;
+  }
+
+  if (inGrayscaleMode) {
+    grayscaleRevert();
+  }
+
+  const uint16_t windowWidthBytes = w / 8;
+  const uint32_t windowBufferSize = windowWidthBytes * h;
+  auto* windowBuffer = static_cast<uint8_t*>(malloc(windowBufferSize));
+  if (windowBuffer == nullptr) {
+    if (Serial)
+      Serial.printf("[%lu]   ERROR: Window buffer allocation failed, falling back to full dark redrive\n", millis());
+    displayBuffer(DARK_REDRIVE, turnOffScreen);
+    return;
+  }
+
+  for (uint16_t row = 0; row < h; row++) {
+    const uint16_t srcY = y + row;
+    const uint16_t srcOffset = srcY * displayWidthBytes + (x / 8);
+    const uint16_t dstOffset = row * windowWidthBytes;
+    memcpy(&windowBuffer[dstOffset], &frameBuffer[srcOffset], windowWidthBytes);
+  }
+
+  for (uint32_t i = 0; i < windowBufferSize; i++) {
+    windowBuffer[i] = static_cast<uint8_t>(~windowBuffer[i]);
+  }
+
+  setRamArea(x, y, w, h);
+  writeRamBuffer(CMD_WRITE_RAM_RED, windowBuffer, windowBufferSize);
+
+  for (uint32_t i = 0; i < windowBufferSize; i++) {
+    windowBuffer[i] = static_cast<uint8_t>(~windowBuffer[i]);
+  }
+
+  writeRamBuffer(CMD_WRITE_RAM_BW, windowBuffer, windowBufferSize);
+
+  refreshDisplay(FAST_REFRESH, turnOffScreen);
+
+#ifdef EINK_DISPLAY_SINGLE_BUFFER_MODE
+  setRamArea(x, y, w, h);
+  writeRamBuffer(CMD_WRITE_RAM_RED, windowBuffer, windowBufferSize);
+#else
+  for (uint16_t row = 0; row < h; row++) {
+    const uint16_t dstY = y + row;
+    const uint16_t dstOffset = dstY * displayWidthBytes + (x / 8);
+    memcpy(&frameBufferActive[dstOffset], &windowBuffer[row * windowWidthBytes], windowWidthBytes);
+  }
+#endif
+
+  free(windowBuffer);
+
+  if (Serial) Serial.printf("[%lu]   Dark redrive window complete\n", millis());
 }
 
 void EInkDisplay::displayGrayBuffer(const bool turnOffScreen,
@@ -1810,7 +1974,7 @@ void EInkDisplay::refreshDisplay(const RefreshMode mode,
 
   // Configure Display Update Control 1
   sendCommand(CMD_DISPLAY_UPDATE_CTRL1);
-  sendData((mode == FAST_REFRESH)
+  sendData((mode == FAST_REFRESH || mode == DARK_REDRIVE)
                ? CTRL1_NORMAL
                : CTRL1_BYPASS_RED); // Configure buffer comparison mode
 
@@ -1855,6 +2019,7 @@ void EInkDisplay::refreshDisplay(const RefreshMode mode,
   // Power on and refresh display
   const char *refreshType = (mode == FULL_REFRESH)   ? "full"
                             : (mode == HALF_REFRESH) ? "half"
+                            : (mode == DARK_REDRIVE) ? "dark-redrive"
                                                      : "fast";
   if (Serial)
     Serial.printf("[%lu]   Powering on display 0x%02X (%s refresh)...\n",

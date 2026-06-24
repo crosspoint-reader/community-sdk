@@ -59,6 +59,43 @@ Then you can include the libraries in your project as usual:
 
 Or load tools from the `tools/` directory as needed.
 
+## 🚀 Usage Examples
+
+### EInkDisplay - Grayscale Display Support
+
+The `EInkDisplay` library supports grayscale rendering with customizable LUTs:
+
+```cpp
+#include <EInkDisplay.h>
+
+EInkDisplay display;
+
+// Basic grayscale display (uses default community LUT)
+display.displayGrayBuffer();
+
+// With screen turn-off
+display.displayGrayBuffer(true);
+
+// Using factory LUT for absolute grayscale mode
+display.displayGrayBuffer(false, lut_factory_quality, true);
+
+// Using custom LUT
+display.displayGrayBuffer(false, my_custom_lut, false);
+```
+
+**Features:**
+- ✅ **Factory and custom LUT support**: Pass `nullptr` for default, or provide custom LUT
+- ✅ **Factory mode option**: Third parameter enables absolute grayscale mode
+- ✅ **X3 and X4 support**: Optimized for both panel types
+
+**Use cases:**
+- Grayscale text rendering (anti-aliased fonts)
+- Image display with multiple gray levels
+- Sleep screen cover art
+
+For more details, see `libs/display/EInkDisplay/` directory and check the header file documentation.
+
+
 ## 🤝 Contributing
 
 This is a **community-driven project** - contributions are not only welcome but encouraged!

@@ -14,7 +14,8 @@ class EInkDisplay {
   enum RefreshMode {
     FULL_REFRESH,  // Full refresh with complete waveform
     HALF_REFRESH,  // Half refresh (1720ms) - balanced quality and speed
-    FAST_REFRESH   // Fast refresh using custom LUT
+    FAST_REFRESH,  // Fast refresh using custom LUT
+    DARK_REDRIVE   // Fast refresh with inverted RED RAM to re-drive all pixels
   };
 
   // Set X3 panel geometry and mode (must be called before begin())
@@ -99,6 +100,7 @@ class EInkDisplay {
   void displayBuffer(RefreshMode mode = FAST_REFRESH, bool turnOffScreen = false);
   // EXPERIMENTAL: Windowed update - display only a rectangular region
   void displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h, bool turnOffScreen = false);
+  void displayWindowDarkRedrive(uint16_t x, uint16_t y, uint16_t w, uint16_t h, bool turnOffScreen = false);
   void displayGrayBuffer(bool turnOffScreen = false, const unsigned char* lut = nullptr, bool factoryMode = false);
 
   void refreshDisplay(RefreshMode mode = FAST_REFRESH, bool turnOffScreen = false);
