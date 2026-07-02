@@ -579,10 +579,19 @@ void EInkDisplay::waitForRefresh(const char *comment) {
 
 void EInkDisplay::pollBusy(const char *comment, const char *completeWord) {
   unsigned long start = millis();
+  // The begin hook fires lazily, only once the wait has proven long (see
+  // setBusyWaitHooks); hookFired guarantees the end hook is balanced with it.
+  bool hookFired = false;
+  bool x3SawLow = false;
   if (!_x3Mode) {
     // X4: BUSY held HIGH while busy, drops LOW when done.
     while (digitalRead(_busy) == HIGH) {
       delay(1);
+      if (!hookFired && _busyWaitBeginHook != nullptr &&
+          millis() - start > BUSY_WAIT_HOOK_THRESHOLD_MS) {
+        hookFired = true;
+        _busyWaitBeginHook();
+      }
       if (millis() - start > 30000)
         break;
     }
@@ -595,23 +604,29 @@ void EInkDisplay::pollBusy(const char *comment, const char *completeWord) {
     // LOW -> HIGH edge. If we never observe the LOW phase the operation
     // either completed faster than we could see or was a no-op, and we
     // skip the completion log line.
-    bool sawLow = false;
     while (digitalRead(_busy) == HIGH) {
       delay(1);
       if (millis() - start > 1000)
         break;
     }
     if (digitalRead(_busy) == LOW) {
-      sawLow = true;
+      x3SawLow = true;
       while (digitalRead(_busy) == LOW) {
         delay(1);
+        if (!hookFired && _busyWaitBeginHook != nullptr &&
+            millis() - start > BUSY_WAIT_HOOK_THRESHOLD_MS) {
+          hookFired = true;
+          _busyWaitBeginHook();
+        }
         if (millis() - start > 30000)
           break;
       }
     }
-    if (!sawLow)
-      return;
   }
+  if (hookFired && _busyWaitEndHook != nullptr)
+    _busyWaitEndHook();
+  if (_x3Mode && !x3SawLow)
+    return;
   if (comment && Serial)
     Serial.printf("[%lu]   %s: %s (%lu ms)\n", millis(), completeWord, comment,
                   millis() - start);

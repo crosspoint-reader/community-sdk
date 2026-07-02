@@ -121,6 +121,17 @@ class EInkDisplay {
   // Power management
   void deepSleep();
 
+  // Optional hooks fired around long BUSY waits. A refresh takes ~0.3-2 s during
+  // which the CPU only polls the BUSY pin; these let host firmware save power in
+  // that window (e.g. reduce the CPU clock) without the SDK knowing the policy.
+  // The begin hook fires once a wait exceeds BUSY_WAIT_HOOK_THRESHOLD_MS (so
+  // short command waits never pay for it); the matching end hook fires when the
+  // wait completes. Plain function pointers; both default to disabled.
+  void setBusyWaitHooks(void (*beginHook)(), void (*endHook)()) {
+    _busyWaitBeginHook = beginHook;
+    _busyWaitEndHook = endHook;
+  }
+
   // Access to frame buffer
   uint8_t* getFrameBuffer() const {
     return frameBuffer;
@@ -132,6 +143,11 @@ class EInkDisplay {
  private:
   // Internal geometry setter used by setDisplayX3().
   void setDisplayDimensions(uint16_t width, uint16_t height);
+
+  // Busy-wait hooks (see setBusyWaitHooks)
+  static constexpr unsigned long BUSY_WAIT_HOOK_THRESHOLD_MS = 20;
+  void (*_busyWaitBeginHook)() = nullptr;
+  void (*_busyWaitEndHook)() = nullptr;
 
   // Pin configuration
   int8_t _sclk, _mosi, _cs, _dc, _rst, _busy;
