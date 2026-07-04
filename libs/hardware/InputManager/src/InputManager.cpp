@@ -120,6 +120,10 @@ bool InputManager::isPressed(const uint8_t buttonIndex) const {
   return currentState & (1 << buttonIndex);
 }
 
+bool InputManager::isAnyPressed() const {
+  return currentState > 0;
+}
+
 bool InputManager::wasPressed(const uint8_t buttonIndex) const {
   return pressedEvents & (1 << buttonIndex);
 }

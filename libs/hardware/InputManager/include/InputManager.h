@@ -21,6 +21,13 @@ class InputManager {
    */
   bool isPressed(uint8_t buttonIndex) const;
 
+  /**
+   * Returns true if any button was being held at the time of the last #update() call.
+   *
+   * @return true if any button was being held at the time of the last #update() call
+   */
+  bool isAnyPressed() const;
+
  /**
    * Returns true if the button went from unpressed to pressed between the last two #update() calls.
    *
